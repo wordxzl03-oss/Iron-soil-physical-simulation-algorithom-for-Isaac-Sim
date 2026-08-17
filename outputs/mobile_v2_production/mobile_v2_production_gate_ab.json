@@ -1,0 +1,68 @@
+{
+  "schema": "MOBILE_V2_PRODUCTION_INTEGRATION_GATE_AB/v1",
+  "gate_a": {
+    "z_base_le_b_eff": true,
+    "h_mobile_nonnegative": true,
+    "entrainment_H_free_max_error_m": 0.0,
+    "deposition_H_free_max_error_m": 0.0,
+    "activation_momentum_max_error_m2_s": 0.0,
+    "entrained_volume_m3": 0.0025750000000000005,
+    "deposited_volume_m3": 0.0006500000000000001,
+    "deposition_removed_momentum_kg_m_s": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "b_eff_restore_max_error_m": 0.0,
+    "ledger_error_m3": 0.0,
+    "checkpoint_semantics": "B_EFF_DIRECT+Z_BASE_DIRECT",
+    "compatibility_alias_identity": true,
+    "status": "PASS"
+  },
+  "gate_b_frozen_5s": {
+    "legacy_adapter": "UNCALIBRATED_SNAPSHOT_COMPATIBILITY_ADAPTER",
+    "wall_time_s": 4.69146902500006,
+    "terrain_physics_RTF": 1.06576425707083,
+    "mass_error_uniform_control_m3": 0.0,
+    "mass_error_exact_terrain_weights_m3": -1.865174681370263e-14,
+    "minimum_h_m": 0.0,
+    "H_free_jump_max_m": 1.2934292275930663,
+    "H_free_jump_p99_m": 0.05374707625461808,
+    "mobile_volume_m3": 3.0804917641483334,
+    "moving_mobile_volume_m3": 0.0,
+    "maximum_speed_m_s": 0.001260576643409264,
+    "p99_speed_m_s": 0.0,
+    "R2M_m3": 0.0,
+    "M2R_m3": 0.0,
+    "R2M_from_prior_M2R_m3": 0.0,
+    "new_extrema": {
+      "count": 1400,
+      "above_envelope_volume_m3": 0.13090841735079745,
+      "below_envelope_volume_m3": 0.2360938677075681
+    },
+    "E_density_normalized": {
+      "kinetic": 2.7404846247258267e-18,
+      "gravitational": 5.773643243828941,
+      "pressure_internal": 5.295672044223133,
+      "total": 11.069315288052074
+    },
+    "E_physical_J": {
+      "kinetic": 3.754463935874383e-15,
+      "gravitational": 7909.891244045649,
+      "pressure_internal": 7255.070700585693,
+      "total": 15164.96194463134
+    },
+    "standalone_difference": {
+      "H_free_jump_max_m": -0.0007195196124993863,
+      "H_free_jump_p99_m": -4.5969861516788335e-05,
+      "mobile_volume_m3": 4.440892098500626e-16,
+      "moving_mobile_volume_m3": 0.0,
+      "maximum_speed_m_s": 0.001260576643409264
+    },
+    "first_divergent_operator": "MOBILE_V2_BASAL_FRICTION_SOURCE_PARAMETER_BINDING: accepted standalone used mu=0.55; frozen production material requires mu=0.35",
+    "production_backend": "GPU_WARP_MOBILE_V2_PRODUCTION_SHARED_STATE",
+    "first_hard_regression": null,
+    "status": "PASS"
+  },
+  "continue_to_gate_c": true
+}

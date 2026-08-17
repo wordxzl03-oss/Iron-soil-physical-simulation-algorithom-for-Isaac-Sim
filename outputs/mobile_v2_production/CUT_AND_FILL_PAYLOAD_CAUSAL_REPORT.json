@@ -1,0 +1,167 @@
+{
+  "schema": "CUT_AND_FILL_PAYLOAD_CAUSAL_REPORT/v2",
+  "status": "CAUSAL_ROOT_CAUSE_ESTABLISHED_NO_PHYSICS_FIX_APPLIED",
+  "source_run": "run_1786615982",
+  "source_artifacts": {
+    "raw_step_audit": "outputs/mobile_v2_production/cut_fill_payload_causal_audit.json",
+    "cut_start_checkpoint": "outputs/mobile_v2_production/cut_fill_payload_causal_audit.cut_start.npz",
+    "production_acceptance": "outputs/390f_v2/interactive_runs/run_1786615982/gpu_real_one_cycle_acceptance.json",
+    "runtime_telemetry": "outputs/390f_v2/interactive_runs/run_1786615982/runtime_telemetry.json"
+  },
+  "R2M_GROSS_M3": 4.781875631662157,
+  "R2M_ACCOUNTING": {
+    "failure_zone_m3": 4.61472016448694,
+    "large_avalanche_m3": 0.16715546717521704,
+    "method": "CONSERVATIVE_MOBILE_CONTROL_VOLUME_RECONSTRUCTION",
+    "identity": "R2M=DeltaMobile+M2P+M2R+Outflow-PayloadSpill",
+    "mobile_at_cut_start_m3": 0.004632544601422323,
+    "mobile_at_cut_end_m3": 4.772207460822453
+  },
+  "M2P_GROSS_M3": 0.014300715441126606,
+  "PAYLOAD_SPILL_GROSS_M3": 0.0,
+  "PAYLOAD_TO_AIRBORNE_M3": 0.0,
+  "M2R_GROSS_M3": 0.0,
+  "MOBILE_TO_OUTFLOW_M3": 0.0,
+  "NET_PAYLOAD_GAIN_M3": 0.014300715441126604,
+  "PAYLOAD_BUDGET_RESIDUAL_M3": -1.734723475976807e-18,
+  "MOBILE_CONTROL_VOLUME_RESIDUAL_M3": 0.0,
+  "MASS_ERROR_M3": -6.821210263296962e-12,
+  "MOBILE_IN_MOUTH_ROI_M3": {
+    "mean": 0.0025663292319637898,
+    "p95": 0.005284910638242346,
+    "maximum": 0.17414821584496704
+  },
+  "MOBILE_PROXIMITY_M3": {
+    "radius_0p25_m3": {
+      "mean": 0.04633385138923186,
+      "p95": 0.28059045742304506,
+      "maximum": 0.2895217108984599
+    },
+    "radius_0p5_m3": {
+      "mean": 0.18269245677544046,
+      "p95": 0.8623831773796139,
+      "maximum": 0.8998138021288795
+    },
+    "radius_1p0_m3": {
+      "mean": 0.6968453578215099,
+      "p95": 2.591025163968174,
+      "maximum": 2.7115907249377544
+    },
+    "radius_2p0_m3": {
+      "mean": 1.1948176276270326,
+      "p95": 4.257370017503793,
+      "maximum": 4.490749688160237
+    },
+    "front_m3": {
+      "mean": 0.9448915556405626,
+      "p95": 2.9868954795764795,
+      "maximum": 3.1116734362399407
+    },
+    "mouth_prism_m3": {
+      "mean": 0.0025663292319637898,
+      "p95": 0.005284910638242346,
+      "maximum": 0.17414821584496704
+    },
+    "bucket_interior_m3": {
+      "mean": 0.5854496576177471,
+      "p95": 1.8345762956566651,
+      "maximum": 1.8696506679227043
+    },
+    "left_bypass_m3": {
+      "mean": 0.09453653511554772,
+      "p95": 0.30902341929404264,
+      "maximum": 0.3259249791865389
+    },
+    "right_bypass_m3": {
+      "mean": 0.03046157780188561,
+      "p95": 0.23595218090337666,
+      "maximum": 0.27593326580893107
+    },
+    "behind_m3": {
+      "mean": 0.24992607198647027,
+      "p95": 1.2687263398237956,
+      "maximum": 1.3810776362609567
+    }
+  },
+  "MOUTH_CONTROL_SURFACE": {
+    "candidate_flux_m3": 0.014300715441126606,
+    "accepted_flux_m3": 0.014300715441126606,
+    "capacity_rejected_flux_m3": 0.0,
+    "geometry_rejected_flux_m3": null,
+    "geometry_rejected_flux_status": "NOT_A_SEPARATE_CONSERVATIVE_TRANSITION; non-intersecting material remains Mobile",
+    "intersection_area_m2": {
+      "mean": 1.0982136489224936,
+      "p95": 3.1925352948350145,
+      "maximum": 3.2030064980335107
+    },
+    "positive_relative_normal_speed_m_s": {
+      "all_step_mean": 0.01382592315922496,
+      "active_step_mean": 0.018782386178569758,
+      "p95": 0.043766239359505035,
+      "maximum": 0.39428138361675635,
+      "active_step_fraction": 0.7361111111111112
+    },
+    "bucket_linear_speed_m_s": {
+      "mean": 0.36104682473050226,
+      "maximum": 2.401911371657063
+    },
+    "local_mobile_velocity_status": "AUTHORITATIVE_RELATIVE_SPEED_RECORDED; component vector absent from preserved first-pass records; observer now records compact mouth-prism vector",
+    "intake_classification": "INTAKE_FLUX_TOO_SMALL"
+  },
+  "PAYLOAD_RETENTION": {
+    "capacity_m3": 5.6333998346012155,
+    "maximum_cut_payload_m3": 0.014497247407258126,
+    "remaining_capacity_m3": 5.618902587193958,
+    "capacity_limited_step_count": 0,
+    "spill_m3": 0.0,
+    "intake_then_immediate_spill": false,
+    "retention_operator_role": "NOT_LIMITING_DURING_CUT_AND_FILL"
+  },
+  "CANDIDATE_MOUTH_FLUX_M3": 0.014300715441126606,
+  "ACCEPTED_MOUTH_FLUX_M3": 0.014300715441126606,
+  "MOUTH_CAPTURE_RATIO": 1.0,
+  "GROSS_CAPTURE_RATIO": 0.0029906079837036135,
+  "NET_CAPTURE_RATIO": 0.002990607983703613,
+  "TOOL_PROGRESS_FRACTION": 1.017089764093123,
+  "MAX_PENETRATION_M": 1.9030331671311012,
+  "MEAN_PENETRATION_WHILE_ACTIVE_M": 1.2757494494451298,
+  "TRAJECTORY": {
+    "duration_s": 12.000000624110301,
+    "target_joint_error_end_rad": [
+      -0.000163709613843821,
+      0.0003158202876287486,
+      0.000220947582929773,
+      5.576080658298288e-05
+    ],
+    "target_joint_error_end_max_abs_rad": 0.0003158202876287486,
+    "root_motion": {
+      "net_xy_displacement_m": 0.7361655869225673,
+      "mean_sampled_xy_speed_m_s": 0.07518933905830845,
+      "maximum_sampled_xy_speed_m_s": 0.6456310674833637
+    },
+    "interpretation": "JOINT_TARGET_REACHED; no mechanical actuator stall. Most Mobile activation and mouth overlap occur after commanded cut motion has effectively completed."
+  },
+  "PEAK_SOIL_FORCE_N": 288473.46021199354,
+  "SOIL_FORCE": {
+    "peak_fee_quasi_static_n": 288473.46021199354,
+    "peak_dynamic_mobile_momentum_n": 0.0,
+    "other_unattributed_peak_n": 0.0,
+    "effort_saturated_step_fraction": 0.022222222222222223,
+    "power_limited_step_fraction": 0.0
+  },
+  "SOIL_FORCE_LIMITING_ROLE": "NOT_FORCE_LIMITED",
+  "PRIMARY_BOTTLENECK": "MOBILE_NOT_REACHING_MOUTH",
+  "SECONDARY_CONTRIBUTORS": [
+    "BROAD_FAILURE_ACTIVATION_OUTSIDE_MOUTH_CONTROL_VOLUME",
+    "WEAK_POSITIVE_NORMAL_TRANSPORT_AFTER_COMMAND_COMPLETION"
+  ],
+  "ROOT_CAUSE": "The first broken link is Mobile transport into/through the bucket mouth, not Failure activation, intake acceptance, retention, capacity, force saturation, or mass accounting. Only 0.2991% of R2M crosses the mouth. The mouth prism contains little Mobile for most steps (p95 0.00528 m3), and positive relative-normal speed is weak after the requested joints reach target. Every conservative candidate flux element is accepted and retained.",
+  "MINIMAL_FIX": "NOT_APPLIED; no unambiguous local implementation defect was demonstrated, and trajectory/Mobile transport changes are outside this audit's allowed scope",
+  "CUT_AND_FILL_AFTER_FIX": "NOT_APPLIED",
+  "PRE_DUMP_REACHED": "NO",
+  "VISIBLE_NEEDLE_FOREST": "NOT_EVALUATED",
+  "VISIBLE_TRIANGULAR_FINS": "NOT_EVALUATED",
+  "GRID_SCALE_SPIKE_PROLIFERATION": "NOT_EVALUATED",
+  "physics_changes": [],
+  "forbidden_parameter_changes": []
+}

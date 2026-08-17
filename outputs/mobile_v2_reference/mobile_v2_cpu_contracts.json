@@ -1,0 +1,281 @@
+{
+  "schema": "MOBILE_V2_REFERENCE_CPU_CONTRACTS/v1",
+  "status": "PASS",
+  "continuous_model": {
+    "mass": "dh/dt+div(h*u)=E-D",
+    "momentum": "d(h*u)/dt+div(h*u_tensor_u+P(h)I)=-g*h*grad(b_eff)+friction+external+exchange_momentum",
+    "pressure": "P(h)=0.5*K*g*h^2",
+    "energy": "0.5*h*|u|^2+g*h*b_eff+0.5*K*g*h^2",
+    "K_classification": "ENGINEERING_CLOSURE_UNCALIBRATED"
+  },
+  "B_EFF_STATE_DEFINED": "YES",
+  "production_imported_or_modified": false,
+  "isaac_launched": false,
+  "cases": {
+    "STATIC_FLAT": {
+      "name": "STATIC_FLAT",
+      "status": "PASS",
+      "checks": {
+        "mass": true,
+        "momentum": true,
+        "positivity": true,
+        "finite_CFL": true,
+        "energy": true,
+        "finite": true
+      },
+      "mass_residual_m3": 0.0,
+      "momentum_accounting_residual_m4_s": [
+        0.0,
+        0.0
+      ],
+      "minimum_h_m": 0.0,
+      "maximum_CFL": 0.0,
+      "substeps": 0,
+      "energy": {
+        "before_j_per_density": 4.215412181250001,
+        "after_j_per_density": 4.215412181250001,
+        "kinetic_before_j_per_density": 0.0,
+        "kinetic_after_j_per_density": 0.0,
+        "gravitational_before_j_per_density": 4.122652500000001,
+        "gravitational_after_j_per_density": 4.122652500000001,
+        "internal_before_j_per_density": 0.09275968125000007,
+        "internal_after_j_per_density": 0.09275968125000007,
+        "friction_dissipation_j_per_density": 0.0,
+        "external_work_j_per_density": 0.0,
+        "numerical_residual_j_per_density": 0.0,
+        "tolerance_j_per_density": 4.215412181250002e-09
+      },
+      "no_spurious_motion": true
+    },
+    "STATIC_SLOPE": {
+      "name": "STATIC_SLOPE",
+      "status": "PASS",
+      "checks": {
+        "mass": true,
+        "momentum": true,
+        "positivity": true,
+        "finite_CFL": true,
+        "energy": true,
+        "finite": true
+      },
+      "mass_residual_m3": 0.0,
+      "momentum_accounting_residual_m4_s": [
+        0.0,
+        0.0
+      ],
+      "minimum_h_m": 0.0,
+      "maximum_CFL": 0.0,
+      "substeps": 0,
+      "energy": {
+        "before_j_per_density": 5.810212541731837,
+        "after_j_per_density": 5.810212541731837,
+        "kinetic_before_j_per_density": 0.0,
+        "kinetic_after_j_per_density": 0.0,
+        "gravitational_before_j_per_density": 5.750846345731837,
+        "gravitational_after_j_per_density": 5.750846345731837,
+        "internal_before_j_per_density": 0.059366196000000024,
+        "internal_after_j_per_density": 0.059366196000000024,
+        "friction_dissipation_j_per_density": 0.0,
+        "external_work_j_per_density": 0.0,
+        "numerical_residual_j_per_density": 0.0,
+        "tolerance_j_per_density": 5.810212541731837e-09
+      },
+      "no_spurious_motion": true
+    },
+    "VALLEY": {
+      "name": "VALLEY",
+      "status": "PASS",
+      "checks": {
+        "mass": true,
+        "momentum": true,
+        "positivity": true,
+        "finite_CFL": true,
+        "energy": true,
+        "finite": true
+      },
+      "mass_residual_m3": 0.0,
+      "momentum_accounting_residual_m4_s": [
+        2.47198095326695e-17,
+        -3.694961003830599e-18
+      ],
+      "minimum_h_m": 0.0,
+      "maximum_CFL": 0.17999999999999997,
+      "substeps": 2,
+      "energy": {
+        "before_j_per_density": 8.6865758678275,
+        "after_j_per_density": 8.579527498059555,
+        "kinetic_before_j_per_density": 0.012937681836320006,
+        "kinetic_after_j_per_density": 0.02196604669754113,
+        "gravitational_before_j_per_density": 3.578235266165712,
+        "gravitational_after_j_per_density": 3.578235266165712,
+        "internal_before_j_per_density": 5.095402919825468,
+        "internal_after_j_per_density": 4.979326185196301,
+        "friction_dissipation_j_per_density": 0.0021172645340399136,
+        "external_work_j_per_density": 0.0,
+        "numerical_residual_j_per_density": -0.10493110523390504,
+        "tolerance_j_per_density": 8.6865758678275e-09
+      },
+      "historical_triplet_H_free_m": [
+        1.82,
+        0.5144415194,
+        0.8266754619
+      ],
+      "low_to_forward_face_delta_q_m2_s": -0.0986238093461227,
+      "no_artificial_uphill_gravity": true,
+      "face_source_special_case": false
+    },
+    "MOUND": {
+      "name": "MOUND",
+      "status": "PASS",
+      "checks": {
+        "mass": true,
+        "momentum": true,
+        "positivity": true,
+        "finite_CFL": true,
+        "energy": true,
+        "finite": true
+      },
+      "mass_residual_m3": 0.0,
+      "momentum_accounting_residual_m4_s": [
+        0.0,
+        0.0
+      ],
+      "minimum_h_m": 0.0,
+      "maximum_CFL": 0.17999999999999997,
+      "substeps": 3,
+      "energy": {
+        "before_j_per_density": 0.22634936497157895,
+        "after_j_per_density": 0.22583168005278234,
+        "kinetic_before_j_per_density": 0.0,
+        "kinetic_after_j_per_density": 0.0,
+        "gravitational_before_j_per_density": 0.19834230876871092,
+        "gravitational_after_j_per_density": 0.1983423087687109,
+        "internal_before_j_per_density": 0.02800705620286803,
+        "internal_after_j_per_density": 0.027489371284071456,
+        "friction_dissipation_j_per_density": 5.726433755010163e-05,
+        "external_work_j_per_density": 0.0,
+        "numerical_residual_j_per_density": -0.00046042058124651095,
+        "tolerance_j_per_density": 1e-09
+      }
+    },
+    "SMOOTH_PACKET": {
+      "name": "SMOOTH_PACKET",
+      "status": "PASS",
+      "checks": {
+        "mass": true,
+        "momentum": true,
+        "positivity": true,
+        "finite_CFL": true,
+        "energy": true,
+        "finite": true
+      },
+      "mass_residual_m3": -1.3877787807814457e-17,
+      "momentum_accounting_residual_m4_s": [
+        1.4224732503009818e-16,
+        -2.2095294596538817e-19
+      ],
+      "minimum_h_m": 0.0,
+      "maximum_CFL": 0.17999999999999997,
+      "substeps": 8,
+      "energy": {
+        "before_j_per_density": 0.694701793012138,
+        "after_j_per_density": 0.6868397257555631,
+        "kinetic_before_j_per_density": 0.015076073510320418,
+        "kinetic_after_j_per_density": 0.008954447421743741,
+        "gravitational_before_j_per_density": 0.6692243026582311,
+        "gravitational_after_j_per_density": 0.668101518626936,
+        "internal_before_j_per_density": 0.010401416843586586,
+        "internal_after_j_per_density": 0.009783759706883298,
+        "friction_dissipation_j_per_density": 0.007207602931001291,
+        "external_work_j_per_density": 0.0,
+        "numerical_residual_j_per_density": -0.0006544643255736093,
+        "tolerance_j_per_density": 1e-09
+      }
+    },
+    "OPPOSING_PACKETS": {
+      "name": "OPPOSING_PACKETS",
+      "status": "PASS",
+      "checks": {
+        "mass": true,
+        "momentum": true,
+        "positivity": true,
+        "finite_CFL": true,
+        "energy": true,
+        "finite": true
+      },
+      "mass_residual_m3": -6.938893903907228e-18,
+      "momentum_accounting_residual_m4_s": [
+        1.328147661294743e-18,
+        1.3655641206564212e-19
+      ],
+      "minimum_h_m": 0.0,
+      "maximum_CFL": 0.17999999999999997,
+      "substeps": 7,
+      "energy": {
+        "before_j_per_density": 0.06144205290734692,
+        "after_j_per_density": 0.055392174846255034,
+        "kinetic_before_j_per_density": 0.012063280884940552,
+        "kinetic_after_j_per_density": 0.006347512503200222,
+        "gravitational_before_j_per_density": 0.044377794562234965,
+        "gravitational_after_j_per_density": 0.044377794562234965,
+        "internal_before_j_per_density": 0.005000977460171395,
+        "internal_after_j_per_density": 0.004666867780819846,
+        "friction_dissipation_j_per_density": 0.00558988318005859,
+        "external_work_j_per_density": 0.0,
+        "numerical_residual_j_per_density": -0.0004599948810332932,
+        "tolerance_j_per_density": 1e-09
+      }
+    },
+    "WET_DRY": {
+      "name": "WET_DRY",
+      "status": "PASS",
+      "checks": {
+        "mass": true,
+        "momentum": true,
+        "positivity": true,
+        "finite_CFL": true,
+        "energy": true,
+        "finite": true
+      },
+      "mass_residual_m3": 0.0,
+      "momentum_accounting_residual_m4_s": [
+        -4.163336342344337e-17,
+        -5.218623974170293e-19
+      ],
+      "minimum_h_m": 0.0,
+      "maximum_CFL": 0.17999999999999997,
+      "substeps": 6,
+      "energy": {
+        "before_j_per_density": 0.13586496900000003,
+        "after_j_per_density": 0.12640560450531044,
+        "kinetic_before_j_per_density": 0.010837500000000002,
+        "kinetic_after_j_per_density": 0.0038211664771787787,
+        "gravitational_before_j_per_density": 0.10206324000000003,
+        "gravitational_after_j_per_density": 0.10206324000000003,
+        "internal_before_j_per_density": 0.022964229000000006,
+        "internal_after_j_per_density": 0.020521198028131633,
+        "friction_dissipation_j_per_density": 0.00739528072037505,
+        "external_work_j_per_density": 0.0,
+        "numerical_residual_j_per_density": -0.0020640837743145426,
+        "tolerance_j_per_density": 1e-09
+      }
+    },
+    "BOOKKEEPING_RELABEL": {
+      "status": "PASS",
+      "b_eff_h_q_H_free_bitwise_invariant": true,
+      "classification": "PURE_BOOKKEEPING_RELABEL"
+    },
+    "ENTRAINMENT": {
+      "status": "PASS",
+      "classification": "PHYSICAL_ENTRAINMENT",
+      "H_free_instantaneously_conserved": true,
+      "energy_transfer_j_per_density": 0.005219868750000245
+    },
+    "DEPOSITION": {
+      "status": "PASS",
+      "classification": "PHYSICAL_DEPOSITION",
+      "H_free_instantaneously_conserved": true,
+      "energy_transfer_j_per_density": -0.005703131249999771
+    }
+  }
+}

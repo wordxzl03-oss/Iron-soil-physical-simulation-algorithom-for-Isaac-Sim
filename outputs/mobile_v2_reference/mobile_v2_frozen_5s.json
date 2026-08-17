@@ -1,0 +1,127 @@
+{
+  "schema": "MOBILE_V2_REAL_FROZEN_5S/v1",
+  "status": "PASS",
+  "source_boundary": "outputs/mobile_large_avalanche_causal_audit/strongest_operator_boundary.npz",
+  "source_boundary_physical_time_s": 3.75,
+  "one_combined_continuous_run": true,
+  "isaac_or_gui_launched": false,
+  "support_adapter": {
+    "mapping": "b_eff := frozen H_free - frozen h_mobile",
+    "classification": "UNCALIBRATED_SNAPSHOT_COMPATIBILITY_ADAPTER",
+    "claim_H_resting_is_physical_support": false,
+    "limitation": "checkpoint lacks independent b_eff history across prior entrainment/deposition/relabel events"
+  },
+  "initial": {
+    "mass_m3": 3.0804917641483334,
+    "mass_error_m3": 0.0,
+    "minimum_h_m": 0.0,
+    "H_free_jump_max_m": 1.3058510502503213,
+    "H_free_jump_p99_m": 0.05804184595869456,
+    "mobile_volume_m3": 3.0804917641483334,
+    "moving_mobile_volume_m3": 3.0454517722111785,
+    "mobile_speed_max_m_s": 4.14076262757248,
+    "mobile_speed_p99_m_s": 2.424055292079385,
+    "energy_j_per_density": {
+      "kinetic": 1.4736736112402684,
+      "gravitational": 9.86550851874507,
+      "internal_pressure": 3.4640917277048637,
+      "total": 14.803273857690202,
+      "chunk_numerical_residual": 0.0
+    },
+    "new_extrema": {
+      "count": 0,
+      "max_count": 0,
+      "min_count": 0,
+      "above_envelope_volume_m3": 0.0,
+      "below_envelope_volume_m3": 0.0
+    }
+  },
+  "horizons": {
+    "0p5s": {
+      "mass_m3": 3.080491764148333,
+      "mass_error_m3": -4.440892098500626e-16,
+      "minimum_h_m": 0.0,
+      "H_free_jump_max_m": 1.2772706570719952,
+      "H_free_jump_p99_m": 0.05376661110040863,
+      "mobile_volume_m3": 3.080491764148333,
+      "moving_mobile_volume_m3": 0.002584783262459807,
+      "mobile_speed_max_m_s": 0.17711889147194715,
+      "mobile_speed_p99_m_s": 0.0,
+      "energy_j_per_density": {
+        "kinetic": 7.1157533970817395e-06,
+        "gravitational": 6.181555495905074,
+        "internal_pressure": 5.080369849434042,
+        "total": 11.261932461092513,
+        "chunk_numerical_residual": -3.174569043578586
+      },
+      "new_extrema": {
+        "count": 1123,
+        "max_count": 322,
+        "min_count": 801,
+        "above_envelope_volume_m3": 0.10185203946122523,
+        "below_envelope_volume_m3": 0.19382717784037712
+      }
+    },
+    "2p0s": {
+      "mass_m3": 3.0804917641483316,
+      "mass_error_m3": -1.7763568394002505e-15,
+      "minimum_h_m": 0.0,
+      "H_free_jump_max_m": 1.2935815894666054,
+      "H_free_jump_p99_m": 0.053680130021602684,
+      "mobile_volume_m3": 3.0804917641483316,
+      "moving_mobile_volume_m3": 0.0,
+      "mobile_speed_max_m_s": 0.0,
+      "mobile_speed_p99_m_s": 0.0,
+      "energy_j_per_density": {
+        "kinetic": 0.0,
+        "gravitational": 5.894575032211565,
+        "internal_pressure": 5.23591498203192,
+        "total": 11.130490014243485,
+        "chunk_numerical_residual": -0.1281584893088779
+      },
+      "new_extrema": {
+        "count": 1252,
+        "max_count": 395,
+        "min_count": 857,
+        "above_envelope_volume_m3": 0.1202460389687627,
+        "below_envelope_volume_m3": 0.2233955716217414
+      }
+    },
+    "5p0s": {
+      "mass_m3": 3.080491764148333,
+      "mass_error_m3": -4.440892098500626e-16,
+      "minimum_h_m": 0.0,
+      "H_free_jump_max_m": 1.2941487472055657,
+      "H_free_jump_p99_m": 0.05379304611613487,
+      "mobile_volume_m3": 3.080491764148333,
+      "moving_mobile_volume_m3": 0.0,
+      "mobile_speed_max_m_s": 0.0,
+      "mobile_speed_p99_m_s": 0.0,
+      "energy_j_per_density": {
+        "kinetic": 0.0,
+        "gravitational": 5.777399867107638,
+        "internal_pressure": 5.294833534058605,
+        "total": 11.072233401166244,
+        "chunk_numerical_residual": -0.05681422873090734
+      },
+      "new_extrema": {
+        "count": 1393,
+        "max_count": 512,
+        "min_count": 881,
+        "above_envelope_volume_m3": 0.130495408443383,
+        "below_envelope_volume_m3": 0.235751111989263
+      }
+    }
+  },
+  "mass_error_max_abs_m3": 1.7763568394002505e-15,
+  "positivity": "PASS",
+  "energy_consistency": "PASS",
+  "energy_residuals_j_per_density": [
+    -3.174569043578586,
+    -0.1281584893088779,
+    -0.05681422873090734
+  ],
+  "energy_tolerance_j_per_density": 1.4803273857690203e-07,
+  "wall_time_s": 5.066473082999892,
+  "production_modified": false
+}

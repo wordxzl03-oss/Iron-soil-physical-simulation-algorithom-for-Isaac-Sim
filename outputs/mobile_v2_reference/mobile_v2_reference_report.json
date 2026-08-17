@@ -1,0 +1,53 @@
+{
+  "schema": "MOBILE_V2_REFERENCE_REPORT/v1",
+  "CONTINUOUS_MODEL": "dh/dt + div(h*u) = E-D; d(h*u)/dt + div(h*u_tensor_u + 0.5*K*g*h^2*I) = -g*h*grad(b_eff) + friction + external/tool + exchange momentum",
+  "B_EFF_STATE_DEFINED": "YES",
+  "MASS_CONSERVATION": "PASS",
+  "POSITIVITY": "PASS",
+  "ENERGY_CONSISTENCY": "PASS",
+  "STATIC_FLAT": "PASS",
+  "STATIC_SLOPE": "PASS",
+  "VALLEY": "PASS",
+  "MOUND": "PASS",
+  "WET_DRY": "PASS",
+  "BOOKKEEPING_RELABEL": "PASS",
+  "ENTRAINMENT": "PASS",
+  "DEPOSITION": "PASS",
+  "CPU_DEVICE_EQUIVALENCE": "PASS",
+  "REAL_FROZEN_5S": "PASS",
+  "PRODUCTION_CANDIDATE": "NO",
+  "production_candidate_reason": "The numerical V2 reference and DEVICE port pass, but production lacks an authoritative independently evolved b_eff and V2 is not yet integrated with production entrainment/deposition. The frozen-field b_eff is explicitly an uncalibrated snapshot compatibility adapter.",
+  "pressure_closure": {
+    "equation": "P(h)=0.5*K*g*h^2",
+    "K": 0.45,
+    "classification": "ENGINEERING_CLOSURE_UNCALIBRATED"
+  },
+  "numerical_architecture": "SHARED_FACE_HYDROSTATIC_RECONSTRUCTION_PLUS_CONSERVATIVE_RUSANOV_MASS_MOMENTUM_FLUX",
+  "state_semantics": {
+    "b_eff": "effective physical support/static-flowing interface",
+    "h": "Mobile thickness",
+    "q": "Mobile depth momentum h*u",
+    "H_free": "b_eff+h wherever Mobile occupies the surface",
+    "PURE_BOOKKEEPING_RELABEL": "does not modify b_eff, h, q or H_free",
+    "PHYSICAL_ENTRAINMENT": "moves interface b_eff downward and h upward with explicit momentum/energy transfer",
+    "PHYSICAL_DEPOSITION": "moves interface b_eff upward and h downward with explicit momentum/energy transfer"
+  },
+  "frozen_5s": {
+    "mass_error_max_abs_m3": 1.7763568394002505e-15,
+    "minimum_h_m": 0.0,
+    "initial_energy_j_per_density": 14.803273857690202,
+    "final_energy_j_per_density": 11.072233401166244,
+    "initial_H_free_jump_max_m": 1.3058510502503213,
+    "final_H_free_jump_max_m": 1.2941487472055657,
+    "initial_H_free_jump_p99_m": 0.05804184595869456,
+    "final_H_free_jump_p99_m": 0.05379304611613487
+  },
+  "isaac_simulation_app_launched": false,
+  "gui_launched": false,
+  "production_runtime_modified": false,
+  "evidence": {
+    "CPU_contracts": "mobile_v2_cpu_contracts.json",
+    "CPU_DEVICE": "mobile_v2_cpu_device_equivalence.json",
+    "frozen_5s": "mobile_v2_frozen_5s.json"
+  }
+}

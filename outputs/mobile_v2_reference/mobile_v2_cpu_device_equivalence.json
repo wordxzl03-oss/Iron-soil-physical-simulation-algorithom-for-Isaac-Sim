@@ -1,0 +1,62 @@
+{
+  "schema": "MOBILE_V2_CPU_DEVICE_EQUIVALENCE/v1",
+  "status": "PASS",
+  "equations": "IDENTICAL_HYDROSTATIC_RUSANOV_FACE_FLUX_AND_COULOMB_SOURCE",
+  "production_modified": false,
+  "cases": {
+    "STATIC_FLAT": {
+      "status": "PASS",
+      "h_max_abs_error_m": 0.0,
+      "q_max_abs_error_m2_s": 0.0,
+      "energy_after_abs_error_j_per_density": 0.0,
+      "CPU_substeps": 0,
+      "DEVICE_substeps": 0,
+      "DEVICE_energy_residual_j_per_density": 0.0
+    },
+    "STATIC_SLOPE": {
+      "status": "PASS",
+      "h_max_abs_error_m": 0.0,
+      "q_max_abs_error_m2_s": 0.0,
+      "energy_after_abs_error_j_per_density": 0.0,
+      "CPU_substeps": 0,
+      "DEVICE_substeps": 0,
+      "DEVICE_energy_residual_j_per_density": 0.0
+    },
+    "VALLEY": {
+      "status": "PASS",
+      "h_max_abs_error_m": 1.1102230246251565e-16,
+      "q_max_abs_error_m2_s": 5.551115123125783e-17,
+      "energy_after_abs_error_j_per_density": 0.0,
+      "CPU_substeps": 2,
+      "DEVICE_substeps": 2,
+      "DEVICE_energy_residual_j_per_density": -0.10493110523390506
+    },
+    "MOUND": {
+      "status": "PASS",
+      "h_max_abs_error_m": 2.7755575615628914e-17,
+      "q_max_abs_error_m2_s": 0.0,
+      "energy_after_abs_error_j_per_density": 2.7755575615628914e-17,
+      "CPU_substeps": 3,
+      "DEVICE_substeps": 3,
+      "DEVICE_energy_residual_j_per_density": -0.00046042058124648336
+    },
+    "WET_DRY": {
+      "status": "PASS",
+      "h_max_abs_error_m": 2.7755575615628914e-17,
+      "q_max_abs_error_m2_s": 2.7755575615628914e-17,
+      "energy_after_abs_error_j_per_density": 0.0,
+      "CPU_substeps": 6,
+      "DEVICE_substeps": 6,
+      "DEVICE_energy_residual_j_per_density": -0.0020640837743145487
+    },
+    "SMOOTH_PACKET": {
+      "status": "PASS",
+      "h_max_abs_error_m": 1.3877787807814457e-16,
+      "q_max_abs_error_m2_s": 1.1102230246251565e-16,
+      "energy_after_abs_error_j_per_density": 0.0,
+      "CPU_substeps": 8,
+      "DEVICE_substeps": 8,
+      "DEVICE_energy_residual_j_per_density": -0.0006544643255736067
+    }
+  }
+}
