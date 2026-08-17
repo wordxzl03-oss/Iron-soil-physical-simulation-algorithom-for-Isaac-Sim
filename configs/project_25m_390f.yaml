@@ -1,0 +1,70 @@
+project:
+  name: tracked_excavator_390f_25m_reduced_order_bulk
+  seed: 20260810
+  output_dir: ../outputs/tracked_excavator_390f_25m
+
+terrain:
+  heightmap_path: ../continuous_heightmap_25m_closed_dataset/sequence_000_H0_initial_m.csv
+  source_axis_order: xy
+  nx: 701
+  ny: 701
+  dx_m: 0.05
+  dy_m: 0.05
+  origin_x_m: 0.0
+  origin_y_m: 0.0
+  terrain_prim_path: /World/Terrain/DynamicSurface
+  update_rate_hz: 10.0
+
+mesh:
+  collision_enabled: false
+  update_normals: true
+  normal_update_rate_hz: 10.0
+  subdivision_scheme: none
+  double_sided: true
+  display_color_rgb: [0.44, 0.23, 0.07]
+
+robot:
+  robot_root_prim: /World/_90F_LME_ISAAC_DETAIL_DELIVERY
+  articulation_root_prim: /World/_90F_LME_ISAAC_DETAIL_DELIVERY/tn__390F_LME_ISAAC_DETAIL_DELIVERY_/tn__aaa0ab9
+  tool_link_prim: /World/_90F_LME_ISAAC_DETAIL_DELIVERY/tn__390F_LME_ISAAC_DETAIL_DELIVERY_/tn__aaa0ab9/tn__390F_DETAIL_DELIVERY_Bucket1_zf0
+
+tool:
+  descriptor_source: file
+  descriptor_path: excavator_390f_bucket_descriptor.json
+  tool_frame_prim: /World/_90F_LME_ISAAC_DETAIL_DELIVERY/tn__390F_LME_ISAAC_DETAIL_DELIVERY_/tn__aaa0ab9/tn__390F_DETAIL_DELIVERY_Bucket1_zf0/SoilInteraction/ToolOrigin
+  proxy_level: L1
+  actual_proxy_type: ExtrudedProfileBucket_L1
+  parameters:
+    tool_type: tracked_excavator_bucket_390f
+
+sweep:
+  max_translation_step_grid_fraction: 0.5
+  max_rotation_step_deg: 2.0
+
+excavation:
+  mode: column_clipping
+  minimum_cut_depth_m: 0.002
+  minimum_terrain_height_m: 0.0
+
+solver:
+  type: minimum_slope
+  config_path: minislope.yaml
+  critical_angle_deg: 38.0
+  solve_trigger: action_end
+  max_iterations: 15000
+  tolerance: 2.0e-3
+  sequence_enabled: false
+  boundary_condition: closed
+  conservation_tolerance_m3: 1.0e-6
+
+material:
+  # Scenario value only. Runtime site calibration has not been performed.
+  bulk_density_kg_m3: 1995.0
+  density_is_estimated: true
+
+asset_integration:
+  source_usd: /home/eric/桌面/bulldozer_sim/bulldozer_main.usd
+  expected_sha256: db2bb54fd81b43c9ce57f8ab9ad7d7b07dbe81b6dbf4dbd9dbb321eabe747b7c
+  vehicle_architecture: TRACKED_HYDRAULIC_EXCAVATOR
+  bucket_bulk_contact: CUSTOM_EARTHMOVING
+  bucket_rigid_bulk_collision: DISABLED_TO_PREVENT_DOUBLE_COUNTING

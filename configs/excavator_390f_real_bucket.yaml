@@ -1,0 +1,10 @@
+tool:
+  # Offline descriptor extracted from the audited 390F USD. The JSON contains
+  # CAD-derived geometry in metres, so ordinary Python runs do not need pxr.
+  descriptor_source: file
+  descriptor_path: excavator_390f_bucket_descriptor.json
+  tool_frame_prim: /World/_90F_LME_ISAAC_DETAIL_DELIVERY/tn__390F_LME_ISAAC_DETAIL_DELIVERY_/tn__aaa0ab9/tn__390F_DETAIL_DELIVERY_Bucket1_zf0/SoilInteraction/ToolOrigin
+  proxy_level: L1
+  actual_proxy_type: ExtrudedProfileBucket_L1
+  parameters:
+    tool_type: tracked_excavator_bucket_390f

@@ -1,0 +1,21 @@
+schema_version: isaac-bulk-phase-b-visual/v1
+phase: B
+provenance: VISUAL_ONLY
+
+lighting:
+  default_preset: outdoor_day
+  available_presets: [outdoor_day, overcast, strong_sun]
+  usd_root_path: /World/PhaseBLighting
+
+terrain_material:
+  default_preset: iron_ore_fines
+  available_presets: [iron_ore_fines, damp_iron_ore]
+  usd_material_path: /World/Looks/PhaseBIronOreFines
+  displacement_enabled: false
+  heightmap_writeback_enabled: false
+
+phase_boundary:
+  heightmap_contact_enabled: false
+  payload_enabled: false
+  spill_enabled: false
+  deposition_enabled: false

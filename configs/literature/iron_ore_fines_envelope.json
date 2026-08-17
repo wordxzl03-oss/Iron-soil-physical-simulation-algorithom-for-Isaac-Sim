@@ -1,0 +1,113 @@
+{
+  "schema_version": "material-parameter-envelope-v1",
+  "material": "cohesive Brazilian iron ore pellet/sinter feed fines",
+  "claim": "literature-derived uncertainty envelope, not a statistical confidence interval and not site calibration",
+  "primary_sources": [
+    {
+      "paper": "Mohajeri et al., Bulk properties variability and interdependency determination for cohesive iron ore",
+      "journal": "Powder Technology 367 (2020) 539-557",
+      "doi": "10.1016/j.powtec.2020.04.018",
+      "source_url": "https://pure.tudelft.nl/ws/portalfiles/portal/72396200/1_s2.0_S0032591020303041_main.pdf",
+      "used_data": "three Brazilian cohesive iron ores; ring shear, wall friction and ledge tests over moisture and 2/8/20 kPa pre-consolidation"
+    },
+    {
+      "paper": "Wang et al., Geotechnical properties of a type of iron ore fines",
+      "journal": "Japanese Geotechnical Society Special Publication 2(14), 541-546",
+      "doi": "10.3208/jgssp.JPN-079",
+      "source_url": "https://www.jstage.jst.go.jp/article/jgssp/2/14/2_JPN-079/_article",
+      "used_data": "undrained Mohr-Coulomb friction angle 45.6 degrees; material specific gravity 4.444"
+    }
+  ],
+  "material_contexts": {
+    "Mohajeri_I1": {
+      "material_type": "Carajas pellet feed",
+      "particle_size": "d50 approximately 0.053 mm; all three Mohajeri samples tested over 0.053-1.4 mm sieve range",
+      "as_received_dry_basis_moisture_percent": 13.3
+    },
+    "Mohajeri_I2": {
+      "material_type": "Carajas sinter feed",
+      "particle_size": "d50 0.880 mm",
+      "as_received_dry_basis_moisture_percent": 8.7
+    },
+    "Mohajeri_I3": {
+      "material_type": "Minas-Rio pellet feed",
+      "particle_size": "finer than the 0.053 mm lower sieve used; d50 not resolved",
+      "as_received_dry_basis_moisture_percent": 6.8
+    },
+    "Wang_IOF": {
+      "material_type": "iron ore fines cargo for liquefaction study",
+      "particle_size": "all particles pass 9.5 mm; 33.5% gravel, 42.9% sand, 17.1% silt, 6.5% clay",
+      "water_content_percent": 12.0,
+      "triaxial_condition": "saturated, 50-200 kPa initial effective confinement, 92.8-95.0% compaction degree"
+    }
+  },
+  "parameters": {
+    "rho_bulk_kg_m3": {
+      "low": 1370.0,
+      "reference": 1995.0,
+      "high": 2799.0,
+      "condition": "loose Minas-Rio pellet feed through Carajas sinter feed sheared at 20 kPa; as-received moisture",
+      "method": "ring shear cell lid displacement",
+      "endpoint_provenance": {
+        "low": "Mohajeri I3, as-received 6.8% dry-basis moisture, initial loose ring-shear fill",
+        "reference": "Mohajeri I2, as-received 8.7% dry-basis moisture, initial loose ring-shear fill",
+        "high": "Mohajeri I2, as-received 8.7% dry-basis moisture, after shearing at 20 kPa consolidation"
+      }
+    },
+    "internal_friction_angle_deg": {
+      "low": 29.8,
+      "reference": 37.8,
+      "high": 45.6,
+      "condition": "moisture and stress-history dependent; high endpoint is an undrained triaxial result on a different iron ore fines cargo",
+      "method": "linear ring-shear yield locus / Mohr-Coulomb triaxial envelope",
+      "endpoint_provenance": {
+        "low": "Mohajeri I3 mean linear yield locus at 2 kPa pre-consolidation over moisture sweep",
+        "reference": "Mohajeri I3 mean linear yield locus at 20 kPa pre-consolidation over moisture sweep",
+        "high": "Wang IOF, saturated undrained monotonic triaxial peak envelope at 50-200 kPa effective confinement"
+      }
+    },
+    "cohesion_pa": {
+      "low": 700.0,
+      "reference": 800.0,
+      "high": 3000.0,
+      "condition": "low endpoint includes reported 0.8 +/- 0.1 kPa at 2 kPa pre-consolidation; high endpoint bounds the reported 1.3 kPa moisture-driven span in the more cohesive sample",
+      "method": "ring shear yield-locus intercept",
+      "endpoint_note": "high is derived from the reported 1.3 kPa span corresponding to 77%, not a directly tabulated universal constant",
+      "endpoint_provenance": {
+        "low": "Mohajeri I3 lower bound of 0.8 +/- 0.1 kPa at 2 kPa pre-consolidation",
+        "reference": "Mohajeri I3 mean at 2 kPa pre-consolidation",
+        "high": "engineering upper endpoint inferred from Mohajeri I2's reported 1.3 kPa/77% moisture-driven span"
+      }
+    },
+    "tool_wall_friction_angle_deg": {
+      "low": 20.7,
+      "reference": 31.5,
+      "high": 34.4,
+      "condition": "normal stress 1.1-17.1 kPa and moisture sweep; tested wall coupon in ring shear cell",
+      "method": "wall friction test against blasted hot-rolled stainless steel plate",
+      "endpoint_provenance": {
+        "low": "Mohajeri I2, 17.1 kPa wall normal stress across moisture sweep",
+        "reference": "Mohajeri I1, high wall normal stress endpoint",
+        "high": "Mohajeri I3 average at 1.1 kPa wall normal stress, excluding stated dry outlier"
+      }
+    },
+    "angle_of_repose_deg": {
+      "low": 55.0,
+      "reference": 63.0,
+      "high": 70.0,
+      "condition": "ledge test over three iron ore types and moisture range; excludes non-flowing near-liquid outlier",
+      "method": "ten-repeat ledge angle test"
+    },
+    "theta_start_deg": {
+      "status": "ANGLE_OF_REPOSE_PROXY_ONLY",
+      "low": 55.0,
+      "reference": 63.0,
+      "high": 70.0
+    },
+    "theta_stop_deg": {
+      "status": "NOT_PUBLISHED_FOR_THESE_MATERIALS",
+      "value": null
+    }
+  },
+  "not_applicable_as_probability_distribution": true
+}

@@ -1,0 +1,30 @@
+schema_version: isaac-bulk-phase-g-spill-dump/v1
+phase: G
+
+provenance:
+  bucket_geometry: KNOWN_GEOMETRY
+  material_angles: UNCALIBRATED_SCENARIO_PARAMETER
+  parcel_numerics: NUMERICAL
+
+retention:
+  gravity_m_s2: 9.81
+  orientation_samples: 81
+  use_effective_gravity: true
+
+parcels:
+  target_volume_m3: 0.04
+  minimum_count: 1
+  maximum_count: 100
+  gravity_m_s2: 9.81
+  terrain_clearance_m: 0.01
+  landing_velocity_scale: 1.0
+
+dump:
+  target: terrain
+  receiver_export_supported: true
+  settle_after_landing: true
+
+acceptance:
+  absolute_volume_tolerance_m3: 1.0e-9
+  gravity_only_and_effective_gravity_cases: true
+

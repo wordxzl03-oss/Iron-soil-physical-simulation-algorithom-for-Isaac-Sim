@@ -1,0 +1,11 @@
+schema_version: isaac-bulk-debug-visualization/v1
+authoritative_state: false
+show_failure_zone: false
+show_mobile_layer: false
+show_bucket_mouth: false
+show_payload_COM: false
+show_soil_force_vector: false
+show_contact_points: false
+show_planned_path: false
+show_attack_candidates: false
+show_slope_map: false

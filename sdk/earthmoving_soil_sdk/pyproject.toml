@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "earthmoving-soil"
+version = "0.3.0a1"
+description = "RL-ready reduced-order earthmoving soil physics alpha"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "PyYAML>=6.0"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["earthmoving_soil*", "isaac_bulk_pipeline*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+

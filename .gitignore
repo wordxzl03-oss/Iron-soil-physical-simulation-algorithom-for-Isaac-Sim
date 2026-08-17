@@ -1,0 +1,109 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Environments and dependency caches
+.venv/
+venv/
+.uv-cache/
+.cache/
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Secrets and local configuration
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+*.p12
+
+# Runtime logs and temporary render products
+*.log
+*.stdout.log
+*.stderr.log
+*.tmp
+*.bak
+*.core
+
+# Local Codex/agent state
+.agents/
+.codex/
+
+# Isaac Sim / Omniverse machine-local state
+cache/
+logs/
+kit/cache/
+kit/logs/
+omniverse/cache/
+
+# Generated simulation arrays, checkpoints, recordings, and archives
+*.npy
+*.npz
+*.mp4
+*.mov
+*.avi
+*.gif
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Runtime and experiment outputs.  Only the compact, named validation
+# summaries below form part of the v0.1.0 baseline.
+outputs/*
+!outputs/mobile_v2_reference/
+outputs/mobile_v2_reference/*
+!outputs/mobile_v2_reference/mobile_v2_cpu_contracts.json
+!outputs/mobile_v2_reference/mobile_v2_cpu_device_equivalence.json
+!outputs/mobile_v2_reference/mobile_v2_frozen_5s.json
+!outputs/mobile_v2_reference/mobile_v2_reference_report.json
+!outputs/mobile_v2_production/
+outputs/mobile_v2_production/*
+!outputs/mobile_v2_production/MOBILE_V2_PRODUCTION_INTEGRATION_REPORT.json
+!outputs/mobile_v2_production/mobile_v2_production_gate_ab.json
+!outputs/mobile_v2_production/CUT_AND_FILL_PAYLOAD_CAUSAL_REPORT.json
+
+# Generated datasets, training runs, handoff bundles, and historical copies
+continuous_heightmap_25m_dataset/
+continuous_heightmap_25m_closed_dataset/
+heightmap_test_dataset/
+isaac_interactive_pile_demo/
+isaac_interactive_run/
+deliverables/
+review_bundle_*/
+review_bundle_*.zip.sha256
+rl_runs/
+rl_scoop_demo/
+ablation/
+best_model_large_pile_10pct/
+
+# Large local experiment sets are published selectively as Release assets
+large_pile_validation_100/
+large_pile_validation_200/
+five_scoop_groups_100/
+clear_scooping_trajectory_*/
+
+# Third-party paper retained locally but not redistributed
+Large Scale Robotic Material Handling Learning, Planning, and Control.pdf
+
+# Local release output
+release/
+release_manifests/
+/SHA256SUMS.txt

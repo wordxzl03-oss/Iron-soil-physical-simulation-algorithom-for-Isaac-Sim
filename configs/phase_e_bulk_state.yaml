@@ -1,0 +1,50 @@
+phase_e_bulk_state:
+  schema_version: phase_e.bulk_state.v1
+  units: SI
+
+  terrain_field:
+    semantic: vertex_field
+    axis_order: yx
+    authoritative_surface_topology: triangle_a_c
+    quad_triangles: [[a, b, c], [a, c, d]]
+    exact_quad_volume_formula: dx_m * dy_m / 6 * (2*a + b + 2*c + d)
+    bilinear_trapezoid_is_alternative_only: true
+    provenance: KNOWN_GEOMETRY
+
+  reservoirs:
+    - resting
+    - mobile
+    - payload
+    - airborne
+    - outflow
+  boundary_condition: closed
+  absolute_balance_tolerance_m3: 1.0e-10
+  relative_balance_tolerance: 1.0e-10
+  provenance: NUMERICAL
+
+  payload:
+    nominal_capacity_m3: 4.0
+    enforce_capacity: true
+    mass_field: estimated_payload_mass_kg
+    forbidden_mass_field: true_mass
+    provenance: KNOWN_GEOMETRY
+
+  material_scenario:
+    name: dry_loose_example
+    calibration_status: UNCALIBRATED_SCENARIO_PARAMETER
+    assumed_bulk_density_kg_m3: 2350.0
+    internal_friction_angle_deg: 34.0
+    cohesion_proxy_pa: 0.0
+    tool_friction_coefficient: 0.45
+    start_angle_deg: 36.0
+    stop_angle_deg: 31.0
+    mobile_friction_coefficient: 0.55
+    provenance: UNCALIBRATED_SCENARIO_PARAMETER
+
+  phase_scope:
+    explicit_conservative_transfer_api: true
+    failure_zone: future_phase_f
+    mobile_transport_solver: future_phase_f
+    bucket_intake_flux: future_phase_f
+    deposition: future_phase_f
+    spill_and_dump: future_phase_g

@@ -1,0 +1,42 @@
+{
+  "schema_version": "soil-force-literature-benchmark-v1",
+  "paper": "Obermayr, Vrettos, Kleinert & Eberhard, A Discrete Element Method for assessing reaction forces in excavation tools",
+  "related_peer_reviewed_paper": "Prediction of draft forces in cohesionless soil with the Discrete Element Method",
+  "doi": "10.1016/j.jterra.2011.08.003",
+  "primary_source": "Fraunhofer ITWM Report 228 (2013)",
+  "source_url": "https://publica-rest.fraunhofer.de/server/api/core/bitstreams/c7d65096-b1f3-4314-b727-0c720c54b79b/content",
+  "figure_table_equation": "Section 3.1; Table 1; Table 2; Figures 9 and 10",
+  "reproducibility": "FULLY_REPRODUCIBLE",
+  "measurement_extraction": "Three measured crosses per condition digitized from published Figures 9 and 10; means are benchmark targets and digitization uncertainty is explicit.",
+  "geometry": {
+    "tool": "straight vertical steel blade",
+    "rake_angle_deg": 90.0,
+    "blade_widths_m": [0.2, 0.3],
+    "cutting_depths_m": [0.1, 0.15, 0.2, 0.25]
+  },
+  "material": {
+    "description": "washed uniformly graded sand, grain size 1.0-2.2 mm",
+    "bulk_density_kg_m3": 1440.0,
+    "internal_friction_angle_deg": 35.0,
+    "cohesion_pa": 1000.0,
+    "soil_tool_friction_coefficient": 0.29,
+    "surcharge_pa": 0.0
+  },
+  "trajectory": {
+    "regime": "quasi-static straight horizontal cut",
+    "published_speed_bound_m_s": 0.5,
+    "averaging_travel_interval_m": [0.5, 1.5],
+    "replications": 3,
+    "speed_used_by_current_quasi_static_model": false
+  },
+  "measured_horizontal_force_n": {
+    "width_0.2": [280.0, 505.0, 820.0, 1310.0],
+    "width_0.3": [610.0, 780.0, 1350.0, 2200.0]
+  },
+  "digitization_uncertainty_n": {
+    "width_0.2": 35.0,
+    "width_0.3": 60.0
+  },
+  "parameter_assumptions": [],
+  "benchmark_scope": "quasi-static horizontal draft only; no DEM particle-flow comparison"
+}

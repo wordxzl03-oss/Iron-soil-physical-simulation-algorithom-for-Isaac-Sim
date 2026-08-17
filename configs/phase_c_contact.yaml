@@ -1,0 +1,40 @@
+schema_version: 1
+phase: C
+
+# ContactView is derived from H_resting and is never the visual/authoritative mesh.
+contact:
+  backend: triangle_mesh
+  prim_path: /World/TerrainContact
+  visual_prim_path: /World/TerrainVisual
+  target_spacing_m: 0.10       # NUMERICAL; independent of 0.05 m render grid
+  visible: false
+  rigid_body_enabled: false
+  mesh_approximation: none     # exact static triangle mesh
+  commit:
+    policy: action_end
+    low_frequency_hz: 2.0      # reserved alternative after profiling
+
+heightfield_capability:
+  require_public_usd_api: true
+  require_runtime_update_probe: true
+  fallback_backend: triangle_mesh
+
+collision_filtering:
+  group_prim_root: /World/CollisionGroups
+  groups:
+    - TerrainSupport
+    - WheelContact
+    - ChassisContact
+    - BucketInteraction
+    - EnvironmentStatic
+  disabled_pairs:
+    - [TerrainSupport, BucketInteraction]
+
+wheel_terrain:
+  deformation_enabled: false
+  sinkage_enabled: false
+  compaction_enabled: false
+  rut_enabled: false
+
+slope_tests:
+  degrees: [0.0, 10.0, 20.0]

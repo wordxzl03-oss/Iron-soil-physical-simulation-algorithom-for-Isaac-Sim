@@ -1,0 +1,53 @@
+phase_d_telemetry:
+  schema_version: phase_d.vehicle_telemetry.v1
+  units: SI
+
+  actuator_power:
+    formula: torque_nm * angular_velocity_rad_s
+    integration_rule: piecewise_constant_per_physics_step
+    categories: [drive, steer, lift, bucket]
+    save_positive_energy: true
+    save_signed_energy: true
+    regenerative_efficiency_assumed: false
+    effort_precedence: [measured_effort, applied_effort_command, estimated_effort]
+    provenance: KNOWN_PHYSICAL_DEFINITION
+
+  wheel_slip:
+    formula: (wheel_radius_m * wheel_angular_velocity_rad_s - longitudinal_speed_m_s) / max(abs(wheel_radius_m * wheel_angular_velocity_rad_s), abs(longitudinal_speed_m_s))
+    low_speed_threshold_m_s: 0.10
+    below_threshold_value: 0.0
+    provenance: NUMERICAL
+
+  samples:
+    physics_rate_hz: 60.0
+    fields:
+      - root_pose_and_velocity
+      - roll_pitch_yaw
+      - articulation_angle
+      - joint_velocity
+      - applied_effort_command
+      - measured_effort
+      - target_velocity
+      - wheel_radius_and_slip
+      - normal_and_tangential_contact_load
+      - local_terrain_slope
+    provenance: NUMERICAL
+
+  profiler:
+    statistics: [mean_ms, p50_ms, p95_ms, max_ms]
+    modules:
+      vehicle_physics: physics_rate
+      soil_force: future_phase_h
+      tool_interaction: future_phase_f
+      visual_mesh: low_frequency
+      collision_proxy: action_commit
+      minislope: event_driven
+      planner: future_phase_j
+    provenance: NUMERICAL
+
+  slope_validation:
+    slope_degrees: [0.0, 10.0, 20.0]
+    same_throttle_required: true
+    common_distance_m: 2.0
+    compare: [speed, drive_torque, slip, drive_energy, time_to_common_distance]
+    provenance: ASSUMED_TEST_SCENARIO

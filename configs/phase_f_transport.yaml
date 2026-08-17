@@ -1,0 +1,52 @@
+schema_version: isaac-bulk-phase-f-transport/v1
+phase: F
+
+provenance:
+  equilibrium_factors: DIRECT_LITERATURE_MODEL
+  critical_plane_search: LITERATURE_BASED_REDUCED_ORDER
+  strip_geometry: LITERATURE_BASED_REDUCED_ORDER
+  conservative_rasterization: ENGINEERING_APPROXIMATION
+  material: UNCALIBRATED_SCENARIO_PARAMETER
+
+intersection:
+  minimum_penetration_m: 0.002
+
+failure_zone:
+  strip_width_m: 0.20
+  minimum_failure_angle_deg: 2.0
+  maximum_failure_angle_deg: 88.0
+  failure_angle_samples: 181
+  solver_tolerance_deg: 1.0e-4
+  maximum_solver_iterations: 80
+  maximum_wedge_length_m: 4.0
+  mobilization_depth_gain: 1.0
+  surcharge_pa: 0.0
+  gravity_m_s2: 9.81
+
+mobile_layer:
+  gravity_m_s2: 9.81
+  cfl: 0.35
+  maximum_substeps: 64
+  dry_tolerance_m: 1.0e-8
+  velocity_cap_m_s: 8.0
+  pressure_coefficient: 0.45
+  tool_forcing_relaxation_s: 0.12
+  active_buffer_cells: 4
+  boundary_condition: closed
+
+bucket_intake:
+  dry_tolerance_m: 1.0e-10
+  minimum_inflow_speed_m_s: 0.02
+  require_non_legacy_geometry: true
+
+deposition:
+  settling_rate_m_s: 0.30
+  speed_threshold_m_s: 0.18
+  require_below_stop_angle: true
+
+acceptance:
+  absolute_volume_tolerance_m3: 1.0e-9
+  relative_volume_tolerance: 1.0e-9
+  resolutions: [128, 256, 512, 701]
+  failure_angle_boundary_hit_rate_max: 0.20
+  failure_wedge_relative_volume_error_max: 1.0e-8

@@ -1,0 +1,55 @@
+schema: 390f-final-presentation-demo/v1
+
+# Immutable production configuration.  This presentation file intentionally
+# contains no terrain, material, grid, solver or physics parameters.
+production_config: configs/390f_v2_interactive.yaml
+
+trajectory:
+  # 60 s after START. Targets are consumed by the production bounded actuator
+  # and PhysX articulation; no root/link pose is authored by the demo.
+  waypoints:
+    - label: APPROACH
+      physics_phase: approach
+      duration_s: 7.0
+      target_deg: [0.0, -15.0, 35.333333, -80.0]
+    - label: PENETRATION
+      physics_phase: penetrate
+      duration_s: 8.0
+      target_deg: [0.0, -10.0, 16.0, -60.0]
+    - label: ADVANCE_AND_CURL
+      physics_phase: coordinated_cut
+      duration_s: 9.0
+      target_deg: [0.0, -10.0, 10.0, -30.0]
+    - label: BUCKET_FILL
+      physics_phase: curl_filling
+      duration_s: 10.0
+      target_deg: [0.0, -14.0, 17.0, 18.0]
+    - label: BREAKOUT
+      physics_phase: curl_filling
+      duration_s: 9.0
+      target_deg: [0.0, -22.0, 23.0, 42.0]
+    - label: LIFT
+      physics_phase: lift
+      duration_s: 9.0
+      target_deg: [0.0, -25.0, 17.5, 56.0]
+    - label: HOLD
+      physics_phase: lift_hold
+      duration_s: 8.0
+      target_deg: [0.0, -25.0, 17.5, 56.0]
+
+camera:
+  eye_m: [19.0, -22.0, 12.0]
+  target_m: [4.8, 0.0, 2.3]
+  focal_length_mm: 32.0
+
+hud:
+  title: Observation
+  show_gpu_active: true
+
+visualization:
+  visual_sync_interval_steps: 3
+  blocker_post_breakout_s: 8.0
+  capture_labels: [READY, ADVANCE_AND_CURL, HOLD]
+
+output:
+  root: outputs/390f_presentation_demo

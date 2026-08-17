@@ -1,0 +1,15 @@
+material:
+  profile: MOHAJERI_I3_AS_RECEIVED_LOW_STRESS_NEAR_MATCHED
+  bulk_density_kg_m3: 1370.0
+  internal_friction_angle_deg: 29.8
+  cohesion_pa: 800.0
+  tool_friction_coefficient: 0.6847142903416485
+  start_angle_deg: 38.0
+  stop_angle_deg: 30.0
+  mobile_friction_coefficient: 0.35
+  calibration_status: NOT_YET_PHYSICALLY_CALIBRATED
+  provenance:
+    classification: LITERATURE_INFORMED_REDUCED_ORDER
+    source: Mohajeri et al., Powder Technology 367 (2020) 539-557
+    note: Same frozen reference values; not site calibration.
+

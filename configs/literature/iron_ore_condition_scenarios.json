@@ -1,0 +1,65 @@
+{
+  "schema": "IRON_ORE_CONDITION_SCENARIOS_V1",
+  "claim_boundary": "Literature scenarios, not site calibration or probability distributions.",
+  "scenarios": [
+    {
+      "id": "MOHAJERI_I3_AS_RECEIVED_LOW_STRESS_NEAR_MATCHED",
+      "sample": "Minas-Rio pellet feed I3, finer than 0.053 mm",
+      "moisture_condition": "as received, 6.8% dry basis",
+      "stress_condition": "near-matched low stress: yield locus 2 kPa; wall friction 1.1 kPa",
+      "bulk_density_kg_m3": 1370.0,
+      "internal_friction_angle_deg": 29.8,
+      "cohesion_pa": 800.0,
+      "tool_wall_friction_angle_deg": 34.4,
+      "soil_force_tuple_status": "SAME_SAMPLE_SAME_MOISTURE_NEAR_MATCHED_LOW_STRESS",
+      "flow_angle_status": "ENGINEERING_INPUT_NOT_PUBLISHED_FOR_THIS_DYNAMIC_MODEL",
+      "theta_start_deg": 38.0,
+      "theta_stop_deg": 30.0,
+      "start_stop_angle_status": "LITERATURE_BASED_REDUCED_ORDER_UNCALIBRATED_DYNAMIC_HYSTERESIS",
+      "mobile_friction_coefficient": 0.35,
+      "mobile_friction_status": "ENGINEERING_REDUCED_ORDER_UNCALIBRATED",
+      "large_avalanche_sensitivity_envelope": {
+        "theta_start_deg": [35.0, 38.0, 41.0],
+        "theta_stop_deg": [27.0, 30.0, 33.0],
+        "mobile_friction_coefficient": [0.30, 0.35, 0.40],
+        "claim": "deterministic engineering sensitivity values, not a probability distribution or site calibration"
+      },
+      "primary_source": "Mohajeri et al., Powder Technology 367 (2020) 539-557, DOI 10.1016/j.powtec.2020.04.018"
+    },
+    {
+      "id": "MOHAJERI_I3_AS_RECEIVED_LESS_MOBILE_SENSITIVITY",
+      "sample": "Minas-Rio pellet feed I3, finer than 0.053 mm",
+      "moisture_condition": "as received, 6.8% dry basis",
+      "stress_condition": "same near-matched low-stress soil-force tuple; less-mobile deterministic dynamic sensitivity",
+      "bulk_density_kg_m3": 1370.0,
+      "internal_friction_angle_deg": 29.8,
+      "cohesion_pa": 800.0,
+      "tool_wall_friction_angle_deg": 34.4,
+      "soil_force_tuple_status": "SAME_SAMPLE_SAME_MOISTURE_NEAR_MATCHED_LOW_STRESS",
+      "flow_angle_status": "ENGINEERING_INPUT_NOT_PUBLISHED_FOR_THIS_DYNAMIC_MODEL",
+      "theta_start_deg": 41.0,
+      "theta_stop_deg": 33.0,
+      "start_stop_angle_status": "DECLARED_LESS_MOBILE_ENDPOINT_OF_UNCALIBRATED_SENSITIVITY_ENVELOPE",
+      "mobile_friction_coefficient": 0.40,
+      "mobile_friction_status": "DECLARED_LESS_MOBILE_ENDPOINT_OF_UNCALIBRATED_SENSITIVITY_ENVELOPE",
+      "large_avalanche_sensitivity_envelope": {
+        "theta_start_deg": [35.0, 38.0, 41.0],
+        "theta_stop_deg": [27.0, 30.0, 33.0],
+        "mobile_friction_coefficient": [0.30, 0.35, 0.40],
+        "selected_endpoint": "less_mobile",
+        "claim": "deterministic engineering sensitivity value, not site calibration"
+      },
+      "primary_source": "Mohajeri et al., Powder Technology 367 (2020) 539-557, DOI 10.1016/j.powtec.2020.04.018; dynamic start/stop/mu values are uncalibrated envelope endpoints"
+    },
+    {
+      "id": "MOHAJERI_I3_20KPA_YIELD_LOCUS_ONLY",
+      "sample": "Minas-Rio pellet feed I3",
+      "moisture_condition": "paper condition retained",
+      "stress_condition": "20 kPa pre-consolidation",
+      "internal_friction_angle_deg": 37.8,
+      "status": "INCOMPLETE_FOR_SIMULATION",
+      "reason": "A complete same-condition density/cohesion/tool-wall tuple was not recovered; missing values are not borrowed from other samples."
+    }
+  ],
+  "default_runtime_scenario": "MOHAJERI_I3_AS_RECEIVED_LOW_STRESS_NEAR_MATCHED"
+}

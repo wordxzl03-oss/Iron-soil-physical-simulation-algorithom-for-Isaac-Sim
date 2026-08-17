@@ -1,0 +1,36 @@
+schema_version: isaac-bulk-phase-k-dataset-benchmark/v1
+phase: K
+
+episode:
+  storage: npz_plus_json_manifest
+  atomic_write: true
+  checksum: sha256
+  schema: isaac-bulk-episode/v1
+  assumed_density_mass_labels_only: true
+
+scalability:
+  terrain_resolutions: [128, 256, 512, 701]
+  tool_sizes:
+    small: {width_m: 1.6}
+    medium: {width_m: 2.7}
+    large: {width_m: 4.0}
+  visual_mesh_levels: [low_poly, high_poly]
+
+rates:
+  vehicle_physics_hz: 60
+  soil_force_hz: 60
+  tool_interaction_hz: [10, 60]
+  visual_mesh_hz: [5, 15]
+  collision_proxy: action_commit
+  minislope: event_driven
+  planner: action_level
+
+acceptance:
+  closed_volume_absolute_tolerance_m3: 1.0e-9
+  runtime_statistics: [mean_ms, p50_ms, p95_ms, max_ms]
+  isaac_required_for_final_readiness: true
+
+provenance:
+  rates: ASSUMED_DESIGN_TARGET
+  benchmark_timing: MEASURED_ON_LOCAL_CPU
+  material: UNCALIBRATED_SCENARIO_PARAMETER

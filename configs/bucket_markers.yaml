@@ -1,0 +1,9 @@
+tool:
+  descriptor_source: markers
+  tool_frame_prim: /World/WheelLoader/bucket/Markers/ToolOrigin
+  marker_root: /World/WheelLoader/bucket/Markers
+  proxy_level: L1
+  actual_proxy_type: ExtrudedProfileBucket_L1
+  nominal_capacity_m3: 4.0
+  parameters:
+    tool_type: loader_bucket

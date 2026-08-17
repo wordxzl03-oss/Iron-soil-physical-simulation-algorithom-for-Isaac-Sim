@@ -1,0 +1,22 @@
+project:
+  name: iron_ore_heightfield_512
+  seed: 0
+  output_dir: ../outputs/terrain_512
+
+terrain:
+  heightmap_path: ../data/H_initial_512.npy
+  source_axis_order: yx
+  nx: 512
+  ny: 512
+  dx_m: 0.024951076320939335
+  dy_m: 0.024951076320939335
+  origin_x_m: -6.375
+  origin_y_m: -6.375
+  terrain_prim_path: /World/Terrain/DynamicSurface
+  update_rate_hz: 10.0
+
+mesh:
+  collision_enabled: false
+  update_normals: true
+  normal_update_rate_hz: 5.0
+  subdivision_scheme: none

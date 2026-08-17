@@ -1,0 +1,13 @@
+solver:
+  type: minimum_slope
+  critical_angle_deg: 34.0
+  max_iterations: 1000
+  tolerance: 1.0e-8
+  sequence_enabled: false
+  sequence_stride: 250
+  sequence_max_frames: 32
+  sequence_dtype: float32
+  sequence_memory_limit_mb: 256
+  boundary_condition: closed
+  boundary_height_m: 0.0
+  conservation_tolerance_m3: 1.0e-8

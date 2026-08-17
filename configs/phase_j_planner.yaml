@@ -1,0 +1,44 @@
+schema_version: isaac-bulk-phase-j-planner/v1
+phase: J
+
+goal:
+  kind: target_mass
+  target_mass_kg: 100000.0
+  reevaluate_after_each_action: true
+  fixed_scoop_count: false
+
+attack_candidates:
+  pile_height_threshold_m: 0.25
+  boundary_spacing_m: 1.0
+  pre_dig_distance_m: 4.0
+  footprint_clearance_m: 1.2
+
+objective_weights:
+  delivered_mass: 1.0
+  time: 0.15
+  energy: 0.000002
+  travel: 0.08
+  steering: 0.12
+  slope_risk: 1.0
+  stability_risk: 2.0
+  pareto_logging: true
+
+state_lattice:
+  state: [x_m, y_m, yaw_rad, articulation_rad]
+  wheelbase_m: 3.2
+  primitive_length_m: 0.8
+  maximum_articulation_deg: 38.0
+  maximum_articulation_rate_deg_s: 22.0
+  reverse_penalty: 1.6
+  vehicle_footprint_m: [6.5, 2.5]
+
+tracking:
+  backend: bounded_nonlinear_shooting
+  debug_fallback: pure_pursuit
+  horizon_steps: 8
+  target_speed_m_s: 1.2
+
+provenance:
+  vehicle_geometry: KNOWN_GEOMETRY
+  objective_weights: ASSUMED
+  material: UNCALIBRATED_SCENARIO_PARAMETER

@@ -1,0 +1,29 @@
+schema_version: isaac-bulk-phase-h-soil-force/v1
+phase: H
+
+provenance:
+  equation_family: PHYSICS_INFORMED_REDUCED_ORDER
+  material_parameters: UNCALIBRATED_SCENARIO_PARAMETER
+  force_limits: UNCALIBRATED_SAFETY_LIMIT
+
+soil_force:
+  gravity_m_s2: 9.81
+  surcharge_pa: 0.0
+  maximum_resultant_force_n: 800000.0
+  minimum_direction_speed_m_s: 0.02
+  application_point: cutting_edge_strip_resultant_with_residual_couple
+  dynamic_term: measured_mobile_momentum_exchange
+  arbitrary_inertial_coefficient_used: false
+  share_failure_wedge_geometry: true
+
+isaac_feedback:
+  api: RigidPrim.apply_forces_and_torques_at_pos
+  physics_rate: true
+  bucket_terrain_collision_force_double_counted: false
+  payload_mass_update_rate: action_event
+
+acceptance:
+  penetration_trend_required: true
+  width_trend_required: true
+  cohesion_friction_trend_required: true
+  physical_speed_load_energy_effect_required: true

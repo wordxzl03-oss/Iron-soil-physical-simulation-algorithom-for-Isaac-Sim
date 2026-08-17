@@ -1,0 +1,41 @@
+schema_version: isaac-bulk-phase-i-operation/v1
+phase: I
+
+operation:
+  state_order:
+    - IDLE
+    - DRIVE_TO_PRE_DIG
+    - ALIGN
+    - APPROACH
+    - PENETRATE
+    - FILL
+    - CURL_LIFT
+    - BREAKOUT
+    - REVERSE
+    - TRANSPORT
+    - DUMP
+    - RETURN
+    - SETTLE
+    - DONE
+  position_tolerance_m: 0.60
+  heading_tolerance_deg: 8.0
+  penetration_target_m: 0.45
+  payload_fill_target: 0.80
+  reverse_distance_m: 3.0
+  settle_mobile_volume_m3: 0.01
+  maximum_state_duration_s: 12.0
+
+control:
+  drive_throttle: 0.45
+  approach_throttle: 0.25
+  penetration_throttle: 0.22
+  reverse_throttle: -0.35
+  steering_gain: 1.4
+  no_pose_setter: true
+  shared_vehicle_command: true
+
+provenance:
+  geometry: KNOWN_GEOMETRY
+  gains: ASSUMED
+  thresholds: UNCALIBRATED_OPERATION_PARAMETER
+

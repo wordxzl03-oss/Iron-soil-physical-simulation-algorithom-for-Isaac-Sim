@@ -1,0 +1,37 @@
+solver:
+  solver_backend: OPTIMIZED
+  slope_backend: CPU_OPTIMIZED_COMPACT_TILE_FRONTIER
+  tile_size: 64
+  physics_dt_s: 0.016666666666666666
+  minislope_round_budget_per_step: 1
+  minislope_tolerance_m: 0.002
+  numerical_safety_max_iterations: 1000000
+  mass_tolerance_m3: 1.0e-8
+
+large_avalanche_transition:
+  minimum_connected_cells: 32
+  minimum_connected_area_m2: 0.08
+  minimum_mobilizable_volume_m3: 0.004
+  minimum_mean_excess_start_deg: 0.0
+  persistence_time_s: 0.12
+  mobilization_depth_m: 0.08
+  gravity_velocity_length_m: 0.25
+  velocity_efficiency: 0.45
+  mobile_activity_speed_m_s: 0.05
+  mobile_activity_volume_m3: 1.0e-5
+  dry_tolerance_m: 1.0e-8
+  settled_mobile_volume_m3: 1.0e-5
+  settled_speed_m_s: 0.05
+  connectivity: 8
+  parameter_basis: LITERATURE_BASED_REDUCED_ORDER_UNCALIBRATED
+  sensitivity_case: nominal_uncalibrated
+
+track_soil:
+  sinkage_rate_m_s: 0.012
+  slip_gain: 0.8
+  maximum_sinkage_per_step_m: 0.004
+  maximum_total_rut_depth_m: 0.30
+  shoulder_halo_cells: 3
+  minimum_slip_speed_m_s: 0.02
+  parameter_status: ENGINEERING_REDUCED_ORDER_NOT_SITE_CALIBRATED
+

@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this simulator, please cite this software and the referenced scientific sources."
+title: "390F Iron-Ore Earthmoving Simulator"
+type: software
+authors:
+  - name: "Iron-soil simulator contributors"
+version: 0.1.0-mobile-v2-baseline
+date-released: 2026-08-17
+license: MIT
+repository-code: "https://github.com/wordxzl03-oss/Iron-soil-physical-simulation-algorithom-for-Isaac-Sim"

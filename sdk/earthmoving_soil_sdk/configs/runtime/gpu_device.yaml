@@ -1,0 +1,9 @@
+runtime:
+  runtime_backend: GPU_RUNTIME
+  gpu_device: cuda:0
+
+authority:
+  state_authority: DEVICE
+  normal_full_field_host_download: false
+  visual_publication: DIRTY_H_FREE_TILES
+
