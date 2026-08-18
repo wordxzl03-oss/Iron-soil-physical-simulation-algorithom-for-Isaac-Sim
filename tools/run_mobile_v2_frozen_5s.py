@@ -108,7 +108,8 @@ def main() -> None:
     state = MobileV2State(b_eff, h, q)
     config = MobileV2Config()
     reference = MobileV2ReferenceSolver(config)
-    device = WarpMobileV2ReferenceSolver(config)
+    execution_device = os.environ.get("MOBILE_V2_WARP_DEVICE", "cuda:0")
+    device = WarpMobileV2ReferenceSolver(config, device=execution_device)
     initial_mass = reference.mass(state)
     envelope_max, envelope_min = _envelope(H_free)
     initial = _metrics(reference, state, initial_mass, envelope_max, envelope_min, None)
@@ -143,6 +144,8 @@ def main() -> None:
         "source_boundary_physical_time_s": 3.75,
         "one_combined_continuous_run": True,
         "isaac_or_gui_launched": False,
+        "execution_device": execution_device,
+        "gpu_device_test": execution_device.startswith("cuda"),
         "support_adapter": {
             "mapping": "b_eff := frozen H_free - frozen h_mobile",
             "classification": "UNCALIBRATED_SNAPSHOT_COMPATIBILITY_ADAPTER",

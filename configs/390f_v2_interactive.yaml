@@ -99,6 +99,10 @@ track_soil:
   mechanics_status: CONSERVATIVE_REDUCED_ORDER_PENDING_Bekker_Wong_CALIBRATION
 
 operation:
+  # Production P0 trajectory: continuous, actuator-limited A-E curl-scoop.
+  # This changes only arm target scheduling; all soil physics/task gates stay
+  # authoritative and unchanged.
+  realistic_cut_scoop_enabled: true
   cycle_count: 3
   dig_position_terrain_m: [5.5, 17.5, 1.8]
   dump_position_terrain_m: [14.0, 25.0, 1.0]

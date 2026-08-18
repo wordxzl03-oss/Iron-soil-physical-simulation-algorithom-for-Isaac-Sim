@@ -252,7 +252,7 @@ class PhaseHSoilForceTests(unittest.TestCase):
             result.quasi_static_force_terrain_n,
         ))
 
-    def test_force_limit_can_scale_read_only_momentum_budget(self):
+    def test_force_limit_never_scales_conservative_mobile_reaction(self):
         intersection, failure, tool = self.interaction(depth=0.4, speed=0.0)
         budget = MobileMomentumBudget(
             momentum_before_terrain_kg_m_s=np.zeros(3),
@@ -269,7 +269,9 @@ class PhaseHSoilForceTests(unittest.TestCase):
             failure, intersection, self.material, self.descriptor, tool, budget
         )
         self.assertTrue(result.force_was_limited)
-        self.assertAlmostEqual(result.resultant_force_n, 10_000.0)
+        self.assertAlmostEqual(result.active_momentum_resultant_force_n, 2_000_000.0)
+        self.assertGreater(result.resultant_force_n, 1_990_000.0)
+        self.assertTrue(np.allclose(budget.action_reaction_residual_terrain_ns, 0.0))
         self.assertTrue(np.all(np.isfinite(result.active_momentum_force_terrain_n)))
 
     def test_public_isaac_force_adapter_uses_array_api(self):

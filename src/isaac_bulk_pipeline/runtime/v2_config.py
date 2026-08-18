@@ -59,6 +59,7 @@ class Interactive390FConfig:
     phase_timeout_s: float
     return_travel_timeout_s: float
     navigation_drive_heading_gate_rad: float
+    realistic_cut_scoop_enabled: bool
     phase_targets_rad: Mapping[str, np.ndarray]
     wait_for_user: bool
     debug_overlay_enabled: bool
@@ -258,6 +259,9 @@ class Interactive390FConfig:
             phase_timeout_s=phase_timeout_s,
             return_travel_timeout_s=return_travel_timeout_s,
             navigation_drive_heading_gate_rad=navigation_drive_heading_gate_rad,
+            realistic_cut_scoop_enabled=bool(
+                operation.get("realistic_cut_scoop_enabled", False)
+            ),
             phase_targets_rad=phase_targets,
             wait_for_user=bool(runtime.get("wait_for_user", True)),
             debug_overlay_enabled=bool(visualization["debug_overlay_enabled"]),

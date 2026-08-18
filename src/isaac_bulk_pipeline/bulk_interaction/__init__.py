@@ -29,6 +29,17 @@ from .mobile_layer import MobileLayerConfig, MobileLayerResult, MobileLayerSolve
 from .optimized_mobile_layer import OptimizedMobileLayerSolver
 from .warp_mobile_layer import WarpMobileLayerSolver, WarpMobileStep
 from .warp_mobile_v2 import WarpProductionMobileV2Solver
+from .tool_mobile_contact import (
+    FrictionalWallImpulse,
+    ToolMobileContactSupport,
+    build_tool_mobile_contact_support,
+    physical_bucket_contact_face_mask,
+    resolve_frictional_wall_impulse,
+)
+from .warp_tool_mobile_contact import (
+    DeviceToolMobileContactSupport,
+    WarpExactToolMobileContactGeometry,
+)
 from .track_soil import TrackSoilConfig, TrackSoilModel, TrackSoilResult
 from .warp_track_soil import WarpTrackSoilOperator, WarpTrackSoilStep
 from .warp_deposition import WarpDepositionOperator, WarpDepositionStep
@@ -66,6 +77,13 @@ __all__ = [
     "WarpMobileLayerSolver",
     "WarpProductionMobileV2Solver",
     "WarpMobileStep",
+    "FrictionalWallImpulse",
+    "ToolMobileContactSupport",
+    "build_tool_mobile_contact_support",
+    "physical_bucket_contact_face_mask",
+    "resolve_frictional_wall_impulse",
+    "DeviceToolMobileContactSupport",
+    "WarpExactToolMobileContactGeometry",
     "TrackSoilConfig",
     "TrackSoilModel",
     "TrackSoilResult",

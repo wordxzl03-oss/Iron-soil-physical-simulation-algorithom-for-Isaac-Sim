@@ -29,6 +29,7 @@ class CutFillPayloadCausalAudit:
     m2r_start_m3: float | None = None
     entry_mobile_m3: float | None = None
     failure_zone_r2m_gross_m3: float = 0.0
+    first_simulation_time_s: float | None = None
 
     def _proximity(self, tool_state: Any) -> tuple[dict[str, float], dict[str, Any]]:
         geometry = self.descriptor.bucket_geometry
@@ -136,6 +137,10 @@ class CutFillPayloadCausalAudit:
         mobile_volume_m3: float | None = None,
         machine_velocity_terrain_m_s: np.ndarray | None = None,
         force_application_point_terrain_m: np.ndarray | None = None,
+        requested_joint_target_rad: np.ndarray | None = None,
+        phase: str = "CUT_AND_FILL",
+        trajectory_stage: str = "LEGACY_FIXED_TARGET",
+        mass_balance_error_m3: float = 0.0,
     ) -> None:
         if interaction is None:
             return
@@ -148,6 +153,7 @@ class CutFillPayloadCausalAudit:
             self.entry_mobile_m3 = (
                 None if mobile_volume_m3 is None else float(mobile_volume_m3)
             )
+            self.first_simulation_time_s = float(simulation_time_s)
         self.failure_zone_r2m_gross_m3 += float(failure_zone_r2m_step_m3)
         target_delta = np.asarray(self.phase_target_rad) - self.entry_joint_rad
         progress = float(
@@ -161,8 +167,29 @@ class CutFillPayloadCausalAudit:
         normal = np.linalg.inv(rotation).T @ geometry.mouth_normal_local
         normal /= np.linalg.norm(normal)
         proximity, local_mobile = self._proximity(tool_state)
+        edge_center = np.mean(tool_state.cutting_edge_terrain, axis=0)
+        edge_velocity = np.asarray(tool_state.linear_velocity, dtype=np.float64) + np.cross(
+            np.asarray(tool_state.angular_velocity, dtype=np.float64),
+            edge_center - pose[:3, 3],
+        )
+        separation = np.asarray(
+            tool_state.separation_plane_direction_terrain, dtype=np.float64
+        ).copy()
+        separation /= max(float(np.linalg.norm(separation)), 1.0e-12)
+        plate_normal = np.linalg.inv(rotation).T @ geometry.bottom_plate_normal_local
+        plate_normal /= max(float(np.linalg.norm(plate_normal)), 1.0e-12)
+        requested_target = (
+            np.asarray(self.phase_target_rad, dtype=np.float64)
+            if requested_joint_target_rad is None
+            else np.asarray(requested_joint_target_rad, dtype=np.float64)
+        )
+        mobile_step = interaction.mobile_result
+        contact_support = interaction.failure_bridge.tool_mobile_contact
         self.records.append({
             "simulation_time_s": float(simulation_time_s),
+            "phase_time_s": float(simulation_time_s - self.first_simulation_time_s),
+            "phase": str(phase),
+            "trajectory_stage": str(trajectory_stage),
             "payload_before_m3": float(payload_before_m3),
             "gross_intake_m3": float(intake.bucket_inflow_volume_m3),
             "candidate_mouth_flux_m3": float(intake.candidate_flux_volume_m3),
@@ -182,14 +209,84 @@ class CutFillPayloadCausalAudit:
             "intake_centroid_terrain_m": np.asarray(intake.intake_centroid_terrain_m).tolist(),
             "proximity": proximity,
             "local_mobile": local_mobile,
-            "cutting_edge_center_terrain_m": np.mean(tool_state.cutting_edge_terrain, axis=0).tolist(),
+            "cutting_edge_center_terrain_m": edge_center.tolist(),
+            "cutting_edge_velocity_terrain_m_s": edge_velocity.tolist(),
+            "tool_velocity_decomposition": {
+                "V_TOOL_TOTAL_M_S": float(np.linalg.norm(edge_velocity)),
+                "V_PENETRATION_COMPONENT_M_S": float(np.dot(edge_velocity, plate_normal)),
+                "V_SEPARATION_COMPONENT_M_S": float(np.dot(edge_velocity, separation)),
+                "plate_normal_terrain": plate_normal.tolist(),
+                "separation_tangent_terrain": separation.tolist(),
+            },
             "maximum_penetration_m": float(np.max(interaction.failure_bridge.intersection.penetration_depth_m)),
             "joint_position_rad": q.tolist(),
             "joint_velocity_rad_s": np.asarray(joint_velocity_rad_s).reshape(-1).tolist(),
-            "requested_joint_target_rad": np.asarray(self.phase_target_rad).tolist(),
+            "requested_joint_target_rad": requested_target.tolist(),
+            "BUCKET_CURL_RATE_RAD_S": float(np.asarray(joint_velocity_rad_s).reshape(-1)[3]),
+            "STICK_RETRACTION_RATE_RAD_S": float(np.asarray(joint_velocity_rad_s).reshape(-1)[2]),
+            "BOOM_RATE_RAD_S": float(np.asarray(joint_velocity_rad_s).reshape(-1)[1]),
             "tool_progress_fraction": progress,
             "quasi_static_force_n": np.asarray(quasi_static_force_n).tolist(),
             "dynamic_momentum_force_n": np.asarray(momentum_force_n).tolist(),
+            "tool_mobile_contact": {
+                "geometry_confirmed_candidate_cell_count": int(contact_support.cell_count),
+                "geometry_confirmed_mobile_volume_m3": float(contact_support.mobile_volume_m3),
+                "geometry_performance": dict(
+                    contact_support.performance_diagnostics
+                ),
+                "mobile_nonzero_cell_count": int(
+                    mobile_step.mobile_nonzero_cell_count
+                ),
+                "mobile_substep_count": int(mobile_step.substeps),
+                "contact_prepare_dispatch_ms": float(
+                    mobile_step.tool_mobile_contact_prepare_dispatch_ms
+                ),
+                "contact_h2d_bytes": int(
+                    mobile_step.tool_mobile_contact_h2d_bytes
+                ),
+                "contact_h2d_transfer_count": int(
+                    mobile_step.tool_mobile_contact_h2d_transfer_count
+                ),
+                "mobile_transport_and_source_sync_ms": float(
+                    mobile_step.mobile_transport_and_source_sync_ms
+                ),
+                "tool_mobile_impulse_fused_upper_bound_ms": float(
+                    mobile_step.tool_mobile_impulse_fused_upper_bound_ms
+                ),
+                "impulse_timing_scope": str(
+                    mobile_step.tool_mobile_impulse_timing_scope
+                ),
+                "normal_impulse_ns": float(mobile_step.tool_normal_impulse_ns),
+                "tangential_impulse_ns": float(mobile_step.tool_tangential_impulse_ns),
+                "accepted_tool_to_mobile_impulse_terrain_ns": np.asarray(
+                    mobile_step.tool_impulse_on_mobile_terrain_ns
+                ).tolist(),
+                "machine_reaction_impulse_terrain_ns": (
+                    -np.asarray(mobile_step.tool_impulse_on_mobile_terrain_ns)
+                ).tolist(),
+                "angular_impulse_on_mobile_about_tool_origin_terrain_nms": np.asarray(
+                    mobile_step.tool_angular_impulse_on_mobile_about_tool_origin_terrain_nms
+                ).tolist(),
+                "contact_centroid_terrain_m": np.asarray(
+                    mobile_step.tool_contact_centroid_terrain_m
+                ).tolist(),
+                "tool_to_mobile_work_j": float(mobile_step.tool_work_j),
+                "machine_reaction_work_j": float(mobile_step.machine_reaction_work_j),
+                "frictional_dissipation_j": float(
+                    mobile_step.tool_frictional_dissipation_j
+                ),
+                "total_contact_dissipation_j": float(
+                    mobile_step.tool_contact_dissipation_j
+                ),
+                "active_substep_count": int(mobile_step.tool_contact_active_substeps),
+                "active_cell_substep_count": int(
+                    mobile_step.tool_contact_active_cell_substeps
+                ),
+                "peak_contact_mobile_volume_m3": float(
+                    mobile_step.peak_tool_contact_mobile_volume_m3
+                ),
+                "substeps": list(mobile_step.tool_contact_substep_diagnostics),
+            },
             "applied_soil_force_n": np.asarray(applied_force_n).tolist(),
             "soil_power_on_terrain_w": float(np.dot(np.asarray(applied_force_n), np.asarray(tool_state.linear_velocity))),
             "actuator_effort_command_nm": np.asarray(actuator_output.effort_command_nm).tolist(),
@@ -211,6 +308,7 @@ class CutFillPayloadCausalAudit:
             ),
             "r2m_cumulative_m3": float(avalanche.cumulative_resting_to_mobile_m3),
             "m2r_cumulative_m3": float(avalanche.cumulative_mobile_to_resting_m3),
+            "mass_balance_error_m3": abs(float(mass_balance_error_m3)),
         })
 
     def report(self, *, failure_code: str | None) -> dict[str, Any]:
@@ -261,6 +359,137 @@ class CutFillPayloadCausalAudit:
             primary = "OTHER"
             intake_class = "INTAKE_FLUX_TOO_SMALL"
         peak_force = max(float(np.linalg.norm(item["applied_soil_force_n"])) for item in self.records)
+        active = np.asarray(
+            [
+                item["maximum_penetration_m"] > 0.0
+                and item.get("failure_zone_r2m_step_m3", 0.0) > 0.0
+                and item["proximity"]["radius_2p0_m3"] > 0.0
+                for item in self.records
+            ],
+            dtype=bool,
+        )
+        if not np.any(active):
+            # Historical v1 records did not retain per-step FailureZone R2M.
+            # This fallback is explicitly geometric, never used by physics.
+            active = np.asarray(
+                [
+                    item["maximum_penetration_m"] > 0.0
+                    and item["proximity"]["radius_2p0_m3"] > 0.0
+                    for item in self.records
+                ],
+                dtype=bool,
+            )
+        active_records = [item for item, enabled in zip(self.records, active) if enabled]
+        curl = np.asarray([
+            item.get("BUCKET_CURL_RATE_RAD_S", item.get("joint_velocity_rad_s", [0.0] * 4)[3])
+            for item in self.records
+        ])
+        retract = np.asarray([
+            item.get("STICK_RETRACTION_RATE_RAD_S", item.get("joint_velocity_rad_s", [0.0] * 4)[2])
+            for item in self.records
+        ])
+        penetration_component = np.asarray([
+            item.get("tool_velocity_decomposition", {}).get("V_PENETRATION_COMPONENT_M_S", 0.0)
+            for item in self.records
+        ])
+        separation_component = np.asarray([
+            item.get("tool_velocity_decomposition", {}).get("V_SEPARATION_COMPONENT_M_S", 0.0)
+            for item in self.records
+        ])
+        active_count = max(int(np.count_nonzero(active)), 1)
+        curl_active = curl > 0.01 * 0.70
+        retract_active = retract > 0.01 * 0.55
+        inward = relative > 0.0
+        active_relative = relative[active & inward]
+        failure_rates = np.asarray(
+            [item.get("failure_zone_r2m_step_m3", 0.0) / self.dt_s for item in self.records]
+        )
+
+        def peak_time(values: np.ndarray) -> float | None:
+            if values.size == 0:
+                return None
+            record = self.records[int(np.argmax(values))]
+            return float(record.get("simulation_time_s", 0.0))
+
+        trajectory_metrics = {
+            "active_interval_definition": (
+                "penetration>0 AND FailureZone_R2M_step>0 AND Mobile within 2m; "
+                "historical records without per-step R2M use the declared geometric fallback"
+            ),
+            "joint_activity_definition": "positive rate > 1% of production joint velocity limit",
+            "ACTIVE_CUT_DURATION_S": float(np.count_nonzero(active) * self.dt_s),
+            "PENETRATION_DOMINATED_FRACTION": float(
+                np.count_nonzero(active & (np.abs(penetration_component) > np.abs(separation_component)))
+                / active_count
+            ),
+            "BUCKET_CURL_ACTIVE_FRACTION": float(np.count_nonzero(active & curl_active) / active_count),
+            "STICK_RETRACT_ACTIVE_FRACTION": float(np.count_nonzero(active & retract_active) / active_count),
+            "SIMULTANEOUS_STICK_RETRACT_BUCKET_CURL_FRACTION": float(
+                np.count_nonzero(active & curl_active & retract_active) / active_count
+            ),
+            "POSITIVE_INWARD_TRANSPORT_FRACTION": float(np.count_nonzero(active & inward) / active_count),
+            "PEAK_BUCKET_CURL_RATE_RAD_S": float(np.max(curl[active], initial=0.0)),
+            "MEAN_BUCKET_CURL_RATE_DURING_ACTIVE_CUT_RAD_S": float(np.mean(curl[active])) if np.any(active) else 0.0,
+            "MEAN_STICK_RETRACTION_RATE_DURING_ACTIVE_CUT_RAD_S": float(np.mean(retract[active])) if np.any(active) else 0.0,
+            "MOBILE_MOUTH_P95_M3": float(np.percentile(mouth_volumes[active], 95.0)) if np.any(active) else 0.0,
+            "MOBILE_FRONT_P95_M3": float(np.percentile(
+                np.asarray([item["proximity"]["front_m3"] for item in self.records])[active], 95.0
+            )) if np.any(active) else 0.0,
+            "P95_POSITIVE_RELATIVE_NORMAL_SPEED_M_S": float(np.percentile(active_relative, 95.0)) if active_relative.size else 0.0,
+            "temporal_ordering": {
+                "peak_failure_zone_r2m_rate_time_s": peak_time(failure_rates),
+                "peak_mouth_overlap_time_s": peak_time(overlap),
+                "peak_mouth_flux_time_s": peak_time(np.asarray([item["candidate_mouth_flux_m3"] for item in self.records])),
+                "peak_bucket_curl_rate_time_s": peak_time(curl),
+                "peak_penetration_time_s": peak_time(np.asarray([item["maximum_penetration_m"] for item in self.records])),
+            },
+        }
+        empty_contact = {
+            "geometry_confirmed_mobile_volume_m3": 0.0,
+            "normal_impulse_ns": 0.0,
+            "tangential_impulse_ns": 0.0,
+            "accepted_tool_to_mobile_impulse_terrain_ns": [0.0, 0.0, 0.0],
+            "machine_reaction_impulse_terrain_ns": [0.0, 0.0, 0.0],
+            "tool_to_mobile_work_j": 0.0,
+            "machine_reaction_work_j": 0.0,
+            "frictional_dissipation_j": 0.0,
+            "total_contact_dissipation_j": 0.0,
+            "active_substep_count": 0,
+            "active_cell_substep_count": 0,
+            "peak_contact_mobile_volume_m3": 0.0,
+            "substeps": [],
+        }
+        contact_records = [
+            item.get("tool_mobile_contact", empty_contact) for item in self.records
+        ]
+        accepted_impulse = sum(
+            (
+                np.asarray(item["accepted_tool_to_mobile_impulse_terrain_ns"], dtype=np.float64)
+                for item in contact_records
+            ),
+            start=np.zeros(3, dtype=np.float64),
+        )
+        machine_impulse = sum(
+            (
+                np.asarray(item["machine_reaction_impulse_terrain_ns"], dtype=np.float64)
+                for item in contact_records
+            ),
+            start=np.zeros(3, dtype=np.float64),
+        )
+        action_reaction = accepted_impulse + machine_impulse
+        impulse_scale = max(float(np.linalg.norm(accepted_impulse)), 1.0e-30)
+        contact_substeps = [
+            substep
+            for item in contact_records
+            for substep in item["substeps"]
+            if int(substep["contact_active_cell_count"]) > 0
+        ]
+        unexplained_energy = float(sum(
+            float(substep["mobile_kinetic_energy_change_due_to_contact_j"])
+            + float(substep["total_contact_dissipation_j"])
+            - float(substep["tool_to_mobile_work_j"])
+            for substep in contact_substeps
+        ))
         return {
             "schema": "CUT_AND_FILL_PAYLOAD_CAUSAL_REPORT/v1",
             "status": "CAUSAL_AUDIT_COMPLETE",
@@ -284,6 +513,7 @@ class CutFillPayloadCausalAudit:
             "CAPACITY_REJECTED_FLUX_M3": candidate - accepted,
             "MOUTH_CAPTURE_RATIO": capture,
             "MEAN_POSITIVE_RELATIVE_NORMAL_SPEED_M_S": mean_positive_relative,
+            "P95_POSITIVE_RELATIVE_NORMAL_SPEED_M_S": trajectory_metrics["P95_POSITIVE_RELATIVE_NORMAL_SPEED_M_S"],
             "MEAN_MOUTH_PRISM_TO_R2M_RATIO": mouth_to_r2m,
             "GROSS_CAPTURE_RATIO": gross_m2p / r2m if r2m > 0.0 else None,
             "NET_CAPTURE_RATIO": net / r2m if r2m > 0.0 else None,
@@ -298,12 +528,57 @@ class CutFillPayloadCausalAudit:
                 "power_limited_step_fraction": float(np.mean(power_limited)),
                 "cumulative_soil_work_on_terrain_j": float(sum(item["soil_power_on_terrain_w"] * self.dt_s for item in self.records)),
             },
+            "TOOL_MOBILE_COUPLING": {
+                "contact_active_step_count": int(sum(
+                    item["active_substep_count"] > 0 for item in contact_records
+                )),
+                "contact_active_substep_count": int(sum(
+                    item["active_substep_count"] for item in contact_records
+                )),
+                "contact_active_cell_substep_count": int(sum(
+                    item["active_cell_substep_count"] for item in contact_records
+                )),
+                "peak_geometry_confirmed_mobile_volume_m3": float(max(
+                    item["geometry_confirmed_mobile_volume_m3"] for item in contact_records
+                )),
+                "peak_contact_mobile_volume_m3": float(max(
+                    item["peak_contact_mobile_volume_m3"] for item in contact_records
+                )),
+                "total_normal_impulse_ns": float(sum(
+                    item["normal_impulse_ns"] for item in contact_records
+                )),
+                "total_tangential_impulse_ns": float(sum(
+                    item["tangential_impulse_ns"] for item in contact_records
+                )),
+                "total_mobile_dynamic_impulse_terrain_ns": accepted_impulse.tolist(),
+                "total_machine_reaction_impulse_terrain_ns": machine_impulse.tolist(),
+                "action_reaction_residual_terrain_ns": action_reaction.tolist(),
+                "action_reaction_residual_norm_ns": float(np.linalg.norm(action_reaction)),
+                "action_reaction_relative_residual": float(
+                    np.linalg.norm(action_reaction) / impulse_scale
+                ),
+                "tool_to_mobile_work_j": float(sum(
+                    item["tool_to_mobile_work_j"] for item in contact_records
+                )),
+                "machine_reaction_work_j": float(sum(
+                    item["machine_reaction_work_j"] for item in contact_records
+                )),
+                "frictional_dissipation_j": float(sum(
+                    item["frictional_dissipation_j"] for item in contact_records
+                )),
+                "total_contact_dissipation_j": float(sum(
+                    item["total_contact_dissipation_j"] for item in contact_records
+                )),
+                "unexplained_contact_energy_j": unexplained_energy,
+            },
             "SOIL_FORCE_LIMITING_ROLE": (
                 "ACTUATOR_OR_POWER_LIMIT_CORRELATED" if np.mean(saturated | power_limited) > 0.5
                 else "NOT_FORCE_LIMITED"
             ),
             "INTAKE_CLASSIFICATION": intake_class,
             "PRIMARY_BOTTLENECK": primary,
+            "MAX_MASS_ERROR_M3": max(abs(float(item.get("mass_balance_error_m3", 0.0))) for item in self.records),
+            "TRAJECTORY_METRICS": trajectory_metrics,
             "proximity_maxima_m3": {
                 key: max(item["proximity"][key] for item in self.records)
                 for key in first["proximity"]

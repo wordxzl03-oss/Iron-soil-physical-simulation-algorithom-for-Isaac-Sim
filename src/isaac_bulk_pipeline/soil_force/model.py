@@ -60,6 +60,9 @@ class MobileMomentumBudget:
     numerical_dissipative_impulse_terrain_ns: np.ndarray
     tool_impulse_on_mobile_terrain_ns: np.ndarray
     integration_window_s: float
+    tool_angular_impulse_on_mobile_about_tool_origin_terrain_nms: np.ndarray = field(
+        default_factory=lambda: np.zeros(3, dtype=np.float64)
+    )
     classification: str = "CONSERVATION_BASED_ENGINEERING_MODEL"
 
     def __post_init__(self) -> None:
@@ -70,6 +73,7 @@ class MobileMomentumBudget:
             "basal_friction_impulse_terrain_ns",
             "numerical_dissipative_impulse_terrain_ns",
             "tool_impulse_on_mobile_terrain_ns",
+            "tool_angular_impulse_on_mobile_about_tool_origin_terrain_nms",
         ):
             value = np.asarray(getattr(self, name), dtype=np.float64)
             if value.shape != (3,) or not np.all(np.isfinite(value)):
@@ -106,6 +110,14 @@ class MobileMomentumBudget:
                 mobile.tool_impulse_on_mobile_terrain_ns + activation
             ),
             integration_window_s=dt_s,
+            tool_angular_impulse_on_mobile_about_tool_origin_terrain_nms=np.asarray(
+                getattr(
+                    mobile,
+                    "tool_angular_impulse_on_mobile_about_tool_origin_terrain_nms",
+                    np.zeros(3),
+                ),
+                dtype=np.float64,
+            ),
         )
 
     @property
@@ -122,6 +134,19 @@ class MobileMomentumBudget:
     @property
     def soil_force_on_tool_terrain_n(self) -> np.ndarray:
         return _ro(self.soil_impulse_on_tool_terrain_ns / self.integration_window_s)
+
+    @property
+    def soil_angular_impulse_on_tool_about_tool_origin_terrain_nms(self) -> np.ndarray:
+        return _ro(
+            -self.tool_angular_impulse_on_mobile_about_tool_origin_terrain_nms
+        )
+
+    @property
+    def soil_torque_on_tool_about_tool_origin_terrain_nm(self) -> np.ndarray:
+        return _ro(
+            self.soil_angular_impulse_on_tool_about_tool_origin_terrain_nms
+            / self.integration_window_s
+        )
 
     @property
     def balance_residual_terrain_ns(self) -> np.ndarray:
@@ -335,7 +360,14 @@ class SoilForceModel:
             dtype=np.float64,
             copy=True,
         )
-        dynamic_torque = np.cross(cutting_center - origin, dynamic_force)
+        dynamic_torque = (
+            np.cross(cutting_center - origin, dynamic_force)
+            if momentum_budget is None
+            else np.asarray(
+                momentum_budget.soil_torque_on_tool_about_tool_origin_terrain_nm,
+                dtype=np.float64,
+            )
+        )
         if np.linalg.norm(dynamic_force) > 0.0:
             dynamic_weight = float(np.linalg.norm(dynamic_force))
             weighted_point += dynamic_weight * cutting_center
@@ -344,14 +376,17 @@ class SoilForceModel:
         force = static_force + dynamic_force
         torque = static_torque + dynamic_torque
         unclipped = float(np.linalg.norm(force))
-        limited = unclipped > self.config.maximum_resultant_force_n
+        # A measured Mobile contact impulse is a conservation constraint, not
+        # a fitted soil-force estimate, and may never be scaled independently
+        # of the +J written to Mobile.  The legacy safety cap therefore applies
+        # only to the quasi-static FailureSurface channel.
+        static_unclipped = float(np.linalg.norm(static_force))
+        limited = static_unclipped > self.config.maximum_resultant_force_n
         scale = 1.0
         if limited:
-            scale = self.config.maximum_resultant_force_n / unclipped
-            force *= scale
-            torque *= scale
+            scale = self.config.maximum_resultant_force_n / static_unclipped
             static_force *= scale
-            dynamic_force *= scale
+            static_torque *= scale
             total_cut *= scale
             total_normal *= scale
             strips = [
@@ -367,6 +402,8 @@ class SoilForceModel:
                 )
                 for strip in strips
             ]
+            force = static_force + dynamic_force
+            torque = static_torque + dynamic_torque
 
         point = (
             cutting_center

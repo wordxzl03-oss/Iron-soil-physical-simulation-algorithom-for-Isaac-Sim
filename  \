@@ -1,0 +1,427 @@
+[1mdiff --git a/isaac_loader/run_390f_v2.py b/isaac_loader/run_390f_v2.py[m
+[1mindex f64c77e..d36108c 100644[m
+[1m--- a/isaac_loader/run_390f_v2.py[m
+[1m+++ b/isaac_loader/run_390f_v2.py[m
+[36m@@ -183,6 +183,32 @@[m [mPARSER.add_argument([m
+     default=None,[m
+     help="write one read-only CUT_AND_FILL payload causal audit and start checkpoint",[m
+ )[m
+[32m+[m[32mPARSER.add_argument([m
+[32m+[m[32m    "--realistic-cut-scoop",[m
+[32m+[m[32m    action=argparse.BooleanOptionalAction,[m
+[32m+[m[32m    default=None,[m
+[32m+[m[32m    help=([m
+[32m+[m[32m        "replace the legacy fixed CUT target by the audited continuous A-E "[m
+[32m+[m[32m        "curl-scoop target schedule; physics and task gates remain unchanged"[m
+[32m+[m[32m    ),[m
+[32m+[m[32m)[m
+[32m+[m[32mPARSER.add_argument([m
+[32m+[m[32m    "--tracksoil-conservation-audit",[m
+[32m+[m[32m    action="store_true",[m
+[32m+[m[32m    help=([m
+[32m+[m[32m        "acceptance-only per-operator DEVICE scalar ledger from post CUT/CURL "[m
+[32m+[m[32m        "through PRE_DUMP; does not alter terrain physics"[m
+[32m+[m[32m    ),[m
+[32m+[m[32m)[m
+[32m+[m[32mPARSER.add_argument([m
+[32m+[m[32m    "--mobile-v2-dual-cv-audit",[m
+[32m+[m[32m    type=Path,[m
+[32m+[m[32m    default=None,[m
+[32m+[m[32m    help=([m
+[32m+[m[32m        "P0-2B acceptance-only per-operator DEVICE ledger output; reuses the "[m
+[32m+[m[32m        "P0-2A observer without overwriting its frozen causal artifacts"[m
+[32m+[m[32m    ),[m
+[32m+[m[32m)[m
+ ARGS, _UNKNOWN = PARSER.parse_known_args()[m
+ if ARGS.dump_plus_9_checkpoint is not None and ARGS.dump_after_checkpoint is None:[m
+     raise ValueError("--dump-plus-9-checkpoint requires --dump-after-checkpoint")[m
+[36m@@ -220,6 +246,11 @@[m [mif ARGS.avalanche_sensitivity != "nominal":[m
+         f"{ARGS.avalanche_sensitivity}_uncalibrated"[m
+     )[m
+     CONFIG = replace(CONFIG, large_avalanche_transition=transition)[m
+[32m+[m[32mREALISTIC_CUT_SCOOP = ([m
+[32m+[m[32m    CONFIG.realistic_cut_scoop_enabled[m
+[32m+[m[32m    if ARGS.realistic_cut_scoop is None[m
+[32m+[m[32m    else bool(ARGS.realistic_cut_scoop)[m
+[32m+[m[32m)[m
+ HEADLESS = CONFIG.headless if ARGS.headless is None else bool(ARGS.headless)[m
+ PRESENTATION_DEMO = bool(ARGS.presentation_demo)[m
+ FINAL_PRESENTATION = ARGS.final_presentation_config is not None[m
+[36m@@ -276,6 +307,16 @@[m [mif ARGS.cut_fill_payload_audit is not None and ([m
+     raise ValueError([m
+         "--cut-fill-payload-audit requires --headless --acceptance-cycles 1 and GPU_RUNTIME"[m
+     )[m
+[32m+[m[32mif (ARGS.tracksoil_conservation_audit or ARGS.mobile_v2_dual_cv_audit is not None) and ([m
+[32m+[m[32m    not HEADLESS[m
+[32m+[m[32m    or ARGS.acceptance_cycles != 1[m
+[32m+[m[32m    or CONFIG.runtime_backend != "GPU_RUNTIME"[m
+[32m+[m[32m    or ARGS.mobile_v2_pre_dump_acceptance is None[m
+[32m+[m[32m):[m
+[32m+[m[32m    raise ValueError([m
+[32m+[m[32m        "ledger conservation audit requires --headless --acceptance-cycles 1 "[m
+[32m+[m[32m        "--mobile-v2-pre-dump-acceptance PATH and GPU_RUNTIME"[m
+[32m+[m[32m    )[m
+ [m
+ MANUAL_PRESENTATION_GUI = bool([m
+     PRESENTATION_DEMO[m
+[36m@@ -704,6 +745,12 @@[m [mdef main() -> None:[m
+     from isaac_bulk_pipeline.runtime.cut_fill_payload_audit import ([m
+         CutFillPayloadCausalAudit,[m
+     )[m
+[32m+[m[32m    from isaac_bulk_pipeline.runtime.curl_scoop_trajectory import ([m
+[32m+[m[32m        RealisticCurlScoopTrajectory,[m
+[32m+[m[32m    )[m
+[32m+[m[32m    from isaac_bulk_pipeline.runtime.tracksoil_conservation_audit import ([m
+[32m+[m[32m        TrackSoilConservationAudit,[m
+[32m+[m[32m    )[m
+     from isaac_bulk_pipeline.terrain import HeightmapIO, TerrainGrid[m
+     from isaac_bulk_pipeline.tools import ToolDescriptorLoader, ToolKinematicsAdapter[m
+     from isaac_bulk_pipeline.vehicle import ([m
+[36m@@ -719,6 +766,7 @@[m [mdef main() -> None:[m
+         ChunkedDynamicMeshAdapter, LightingManager, TerrainMaterialAdapter,[m
+     )[m
+ [m
+[32m+[m
+     run_id = f"run_{int(time())}"[m
+     run_dir = CONFIG.output_root / run_id[m
+     run_dir.mkdir(parents=True, exist_ok=True)[m
+[36m@@ -881,7 +929,9 @@[m [mdef main() -> None:[m
+     right_track = world.scene.add(RigidPrim(CONFIG.right_track_body, name="interactive_right_track", reset_xform_properties=False))[m
+     lower_body = world.scene.add(RigidPrim(CONFIG.lower_body, name="interactive_lower_body", reset_xform_properties=False))[m
+     bucket_force_body = world.scene.add(RigidPrim(CONFIG.bucket_link, name="interactive_bucket_force", reset_xform_properties=False))[m
+[31m-    articulation.set_joints_default_state(positions=np.asarray(CONFIG.phase_targets_rad["initial_pose"], dtype=np.float64))[m
+[32m+[m[32m    articulation.set_joints_default_state([m
+[32m+[m[32m        positions=np.asarray(CONFIG.phase_targets_rad["initial_pose"], dtype=np.float64)[m
+[32m+[m[32m    )[m
+     world.reset()[m
+     if not HEADLESS:[m
+         world.pause()[m
+[36m@@ -1135,6 +1185,28 @@[m [mdef main() -> None:[m
+         if ARGS.cut_fill_payload_audit is not None[m
+         else None[m
+     )[m
+[32m+[m[32m    realistic_cut_trajectory = ([m
+[32m+[m[32m        RealisticCurlScoopTrajectory([m
+[32m+[m[32m            np.asarray(CONFIG.phase_targets_rad["penetrate"], dtype=np.float64),[m
+[32m+[m[32m            np.asarray(CONFIG.phase_targets_rad["breakout"], dtype=np.float64),[m
+[32m+[m[32m        )[m
+[32m+[m[32m        if REALISTIC_CUT_SCOOP[m
+[32m+[m[32m        else None[m
+[32m+[m[32m    )[m
+[32m+[m[32m    realistic_cut_sample = None[m
+[32m+[m[32m    tracksoil_conservation_audit = ([m
+[32m+[m[32m        TrackSoilConservationAudit()[m
+[32m+[m[32m        if (ARGS.tracksoil_conservation_audit or ARGS.mobile_v2_dual_cv_audit is not None)[m
+[32m+[m[32m        else None[m
+[32m+[m[32m    )[m
+[32m+[m[32m    production_physics_step_count = 0[m
+[32m+[m[32m    if tracksoil_conservation_audit is not None:[m
+[32m+[m[32m        assert physics_core.gpu_chain is not None[m
+[32m+[m[32m        physics_core.gpu_chain.audit_state_observer = ([m
+[32m+[m[32m            lambda label: tracksoil_conservation_audit.operator_boundary([m
+[32m+[m[32m                label, physics_core.scalar_state()[m
+[32m+[m[32m            )[m
+[32m+[m[32m        )[m
+     cut_fill_start_checkpoint_written = False[m
+     soil_force_evidence = {[m
+         "computed_peak_n": 0.0,[m
+[36m@@ -1396,6 +1468,11 @@[m [mdef main() -> None:[m
+             "support": support_diagnostics,[m
+         }[m
+         track_result = None[m
+[32m+[m[32m        audit_geometry = {[m
+[32m+[m[32m            "affected_cell_count": 0,[m
+[32m+[m[32m            "footprint_area_m2": 0.0,[m
+[32m+[m[32m            "requested_r2m_m3": 0.0,[m
+[32m+[m[32m        }[m
+         if control.snapshot().track_soil_enabled and ([m
+             abs(drive_result.applied_left_command) > 1.0e-4[m
+             or abs(drive_result.applied_right_command) > 1.0e-4[m
+[36m@@ -1408,11 +1485,73 @@[m [mdef main() -> None:[m
+             forward_xy /= max(float(np.linalg.norm(forward_xy)), 1.0e-12)[m
+             left_mask = left_fp.mask if left_contact else np.zeros(grid.shape, dtype=bool)[m
+             right_mask = right_fp.mask if right_contact else np.zeros(grid.shape, dtype=bool)[m
+[32m+[m[32m            left_track_velocity_xy = ([m
+[32m+[m[32m                base_velocity_xy[m
+[32m+[m[32m                + drive_result.applied_left_command[m
+[32m+[m[32m                * CONFIG.nominal_track_belt_speed_m_s[m
+[32m+[m[32m                * forward_xy[m
+[32m+[m[32m            )[m
+[32m+[m[32m            right_track_velocity_xy = ([m
+[32m+[m[32m                base_velocity_xy[m
+[32m+[m[32m                + drive_result.applied_right_command[m
+[32m+[m[32m                * CONFIG.nominal_track_belt_speed_m_s[m
+[32m+[m[32m                * forward_xy[m
+[32m+[m[32m            )[m
+[32m+[m[32m            if tracksoil_conservation_audit is not None:[m
+[32m+[m[32m                track_config = ([m
+[32m+[m[32m                    physics_core.gpu_chain.track.config[m
+[32m+[m[32m                    if physics_core.gpu_chain is not None[m
+[32m+[m[32m                    else physics_core.track_soil_model.config[m
+[32m+[m[32m                )[m
+[32m+[m
+[32m+[m[32m                def requested_track_volume(mask, track_velocity):[m
+[32m+[m[32m                    slip = float([m
+[32m+[m[32m                        np.linalg.norm(track_velocity - base_velocity_xy)[m
+[32m+[m[32m                    )[m
+[32m+[m[32m                    slip_effect = max([m
+[32m+[m[32m                        slip - track_config.minimum_slip_speed_m_s, 0.0[m
+[32m+[m[32m                    )[m
+[32m+[m[32m                    requested_depth = min([m
+[32m+[m[32m                        track_config.maximum_sinkage_per_step_m,[m
+[32m+[m[32m                        track_config.sinkage_rate_m_s[m
+[32m+[m[32m                        * CONFIG.physics_dt_s[m
+[32m+[m[32m                        * (1.0 + track_config.slip_gain * slip_effect),[m
+[32m+[m[32m                    )[m
+[32m+[m[32m                    return float([m
+[32m+[m[32m                        requested_depth[m
+[32m+[m[32m                        * np.sum([m
+[32m+[m[32m                            physics_core.integrator.vertex_weights_m2[mask],[m
+[32m+[m[32m                            dtype=np.float64,[m
+[32m+[m[32m                        )[m
+[32m+[m[32m                    )[m
+[32m+[m
+[32m+[m[32m                combined_mask = left_mask | right_mask[m
+[32m+[m[32m                audit_geometry = {[m
+[32m+[m[32m                    "affected_cell_count": int([m
+[32m+[m[32m                        np.count_nonzero(combined_mask)[m
+[32m+[m[32m                    ),[m
+[32m+[m[32m                    "footprint_area_m2": float([m
+[32m+[m[32m                        np.sum([m
+[32m+[m[32m                            physics_core.integrator.vertex_weights_m2[[m
+[32m+[m[32m                                combined_mask[m
+[32m+[m[32m                            ],[m
+[32m+[m[32m                            dtype=np.float64,[m
+[32m+[m[32m                        )[m
+[32m+[m[32m                    ),[m
+[32m+[m[32m                    "requested_r2m_m3": ([m
+[32m+[m[32m                        requested_track_volume([m
+[32m+[m[32m                            left_mask, left_track_velocity_xy[m
+[32m+[m[32m                        )[m
+[32m+[m[32m                        + requested_track_volume([m
+[32m+[m[32m                            right_mask, right_track_velocity_xy[m
+[32m+[m[32m                        )[m
+[32m+[m[32m                    ),[m
+[32m+[m[32m                }[m
+             track_result = physics_core.apply_track_soil([m
+                 left_footprint_mask=left_mask,[m
+                 right_footprint_mask=right_mask,[m
+[31m-                left_track_velocity_xy_m_s=base_velocity_xy + drive_result.applied_left_command * CONFIG.nominal_track_belt_speed_m_s * forward_xy,[m
+[31m-                right_track_velocity_xy_m_s=base_velocity_xy + drive_result.applied_right_command * CONFIG.nominal_track_belt_speed_m_s * forward_xy,[m
+[32m+[m[32m                left_track_velocity_xy_m_s=left_track_velocity_xy,[m
+[32m+[m[32m                right_track_velocity_xy_m_s=right_track_velocity_xy,[m
+                 base_velocity_xy_m_s=base_velocity_xy,[m
+                 dt_s=CONFIG.physics_dt_s,[m
+             )[m
+[36m@@ -1444,7 +1583,7 @@[m [mdef main() -> None:[m
+                     "resting_to_mobile_volume_m3": track_result.resting_to_mobile_volume_m3,[m
+                     **latest_track_status,[m
+                 })[m
+[31m-        return drive_result, track_result[m
+[32m+[m[32m        return drive_result, track_result, audit_geometry[m
+ [m
+     def synchronize_terrain_contact(*, force: bool = False) -> None:[m
+         nonlocal last_contact_surface, last_contact_update_sim_s, contact_status[m
+[36m@@ -2234,6 +2373,12 @@[m [mdef main() -> None:[m
+                 if decision.state is ExcavatorCycleState.CUT_AND_FILL:[m
+                     cutting_distance_m = 0.0[m
+                     previous_cutting_center = np.mean(current_tool.cutting_edge_terrain, axis=0)[m
+[32m+[m[32m                    if realistic_cut_trajectory is not None:[m
+[32m+[m[32m                        realistic_cut_trajectory.reset([m
+[32m+[m[32m                            np.asarray([m
+[32m+[m[32m                                articulation.get_joint_positions(), dtype=np.float64[m
+[32m+[m[32m                            ).reshape(-1)[m
+[32m+[m[32m                        )[m
+                     if ([m
+                         cut_fill_payload_audit is not None[m
+                         and not cut_fill_start_checkpoint_written[m
+[36m@@ -2322,15 +2467,57 @@[m [mdef main() -> None:[m
+                 panel.update("cycle completed by physical completion conditions")[m
+                 continue[m
+ [m
+[31m-            actuator_output = apply_bounded_arm_target([m
+[31m-                decision.command.joint_target_rad[m
+[32m+[m[32m            commanded_joint_target_rad = decision.command.joint_target_rad[m
+[32m+[m[32m            if ([m
+[32m+[m[32m                realistic_cut_trajectory is not None[m
+[32m+[m[32m                and decision.state[m
+[32m+[m[32m                in {[m
+[32m+[m[32m                    ExcavatorCycleState.CUT_AND_FILL,[m
+[32m+[m[32m                    ExcavatorCycleState.CURL_AND_BREAKOUT,[m
+[32m+[m[32m                }[m
+[32m+[m[32m            ):[m
+[32m+[m[32m                realistic_cut_sample = realistic_cut_trajectory.sample([m
+[32m+[m[32m                    CONFIG.physics_dt_s[m
+[32m+[m[32m                )[m
+[32m+[m[32m                commanded_joint_target_rad = realistic_cut_sample.target_rad[m
+[32m+[m[32m            actuator_output = apply_bounded_arm_target(commanded_joint_target_rad)[m
+[32m+[m[32m            production_physics_step_count += 1[m
+[32m+[m[32m            audit_this_step = bool([m
+[32m+[m[32m                tracksoil_conservation_audit is not None[m
+[32m+[m[32m                and decision.state[m
+[32m+[m[32m                in {[m
+[32m+[m[32m                    ExcavatorCycleState.LIFT_TO_TRANSPORT_HEIGHT,[m
+[32m+[m[32m                    ExcavatorCycleState.REVERSE_TRAVEL,[m
+[32m+[m[32m                    ExcavatorCycleState.ALIGN_DUMP,[m
+[32m+[m[32m                }[m
+             )[m
+[32m+[m[32m            if audit_this_step:[m
+[32m+[m[32m                tracksoil_conservation_audit.begin_step([m
+[32m+[m[32m                    simulation_time_s=float(world.current_time),[m
+[32m+[m[32m                    phase=decision.state.value,[m
+[32m+[m[32m                    physics_step=production_physics_step_count,[m
+[32m+[m[32m                    snapshot=physics_core.scalar_state(),[m
+[32m+[m[32m                )[m
+             track_wall_start = perf_counter()[m
+[31m-            apply_track_soil_for_command([m
+[32m+[m[32m            _, track_result_for_audit, track_geometry_for_audit = apply_track_soil_for_command([m
+                 decision.command.left_track_effort_fraction,[m
+                 decision.command.right_track_effort_fraction,[m
+                 braking=decision.command.hold_brake,[m
+             )[m
+[32m+[m[32m            if audit_this_step:[m
+[32m+[m[32m                tracksoil_conservation_audit.after_tracksoil([m
+[32m+[m[32m                    snapshot=physics_core.scalar_state(),[m
+[32m+[m[32m                    result=track_result_for_audit,[m
+[32m+[m[32m                    affected_cell_count=track_geometry_for_audit[[m
+[32m+[m[32m                        "affected_cell_count"[m
+[32m+[m[32m                    ],[m
+[32m+[m[32m                    footprint_area_m2=track_geometry_for_audit[[m
+[32m+[m[32m                        "footprint_area_m2"[m
+[32m+[m[32m                    ],[m
+[32m+[m[32m                    requested_r2m_m3=track_geometry_for_audit[[m
+[32m+[m[32m                        "requested_r2m_m3"[m
+[32m+[m[32m                    ],[m
+[32m+[m[32m                )[m
+             track_wall_ms = (perf_counter() - track_wall_start) * 1_000.0[m
+             phase_by_state = {[m
+                 ExcavatorCycleState.PENETRATE: "penetrate",[m
+[36m@@ -2397,6 +2584,11 @@[m [mdef main() -> None:[m
+                 soil_force_mode=snapshot.soil_force_mode,[m
+                 phase_ending=deposition_just_completed,[m
+             )[m
+[32m+[m[32m            if audit_this_step:[m
+[32m+[m[32m                tracksoil_conservation_audit.finish_step([m
+[32m+[m[32m                    snapshot=physics_core.scalar_state(),[m
+[32m+[m[32m                    core_result=core_result,[m
+[32m+[m[32m                )[m
+             last_core_result = core_result[m
+             if ([m
+                 V3_CLOSURE_AUDIT[m
+[36m@@ -2552,7 +2744,11 @@[m [mdef main() -> None:[m
+                 )[m
+                 if ([m
+                     cut_fill_payload_audit is not None[m
+[31m-                    and decision.state is ExcavatorCycleState.CUT_AND_FILL[m
+[32m+[m[32m                    and decision.state[m
+[32m+[m[32m                    in {[m
+[32m+[m[32m                        ExcavatorCycleState.CUT_AND_FILL,[m
+[32m+[m[32m                        ExcavatorCycleState.CURL_AND_BREAKOUT,[m
+[32m+[m[32m                    }[m
+                     and core_result.avalanche_transition is not None[m
+                 ):[m
+                     cut_fill_payload_audit.observe([m
+[36m@@ -2588,6 +2784,14 @@[m [mdef main() -> None:[m
+                             if core_result.force_result is None[m
+                             else core_result.force_result.application_point_terrain_m[m
+                         ),[m
+[32m+[m[32m                        requested_joint_target_rad=commanded_joint_target_rad,[m
+[32m+[m[32m                        phase=decision.state.value,[m
+[32m+[m[32m                        trajectory_stage=([m
+[32m+[m[32m                            "LEGACY_FIXED_TARGET"[m
+[32m+[m[32m                            if realistic_cut_sample is None[m
+[32m+[m[32m                            else realistic_cut_sample.stage[m
+[32m+[m[32m                        ),[m
+[32m+[m[32m                        mass_balance_error_m3=core_result.mass_balance_error_m3,[m
+                     )[m
+             if core_result.dump_release is not None:[m
+                 material_funnel["dump_released_volume_m3"] += float([m
+[36m@@ -2691,9 +2895,17 @@[m [mdef main() -> None:[m
+             if core_result.force_result is not None and np.linalg.norm(core_result.applied_force_terrain_n) > 0.0:[m
+                 transform_world = grid.terrain_to_world_matrix[m
+                 point_h = transform_world @ np.r_[core_result.force_result.application_point_terrain_m, 1.0][m
+[32m+[m[32m                residual_couple = ([m
+[32m+[m[32m                    core_result.force_result.residual_couple_terrain_nm[m
+[32m+[m[32m                    if np.allclose([m
+[32m+[m[32m                        core_result.applied_force_terrain_n,[m
+[32m+[m[32m                        core_result.computed_force_terrain_n,[m
+[32m+[m[32m                    )[m
+[32m+[m[32m                    else np.zeros(3, dtype=np.float64)[m
+[32m+[m[32m                )[m
+                 bucket_force_body.apply_forces_and_torques_at_pos([m
+                     forces=(transform_world[:3, :3] @ core_result.applied_force_terrain_n).astype(np.float32).reshape(1, 3),[m
+[31m-                    torques=np.zeros((1, 3), dtype=np.float32),[m
+[32m+[m[32m                    torques=(transform_world[:3, :3] @ residual_couple).astype(np.float32).reshape(1, 3),[m
+                     positions=(point_h[:3] / point_h[3]).astype(np.float32).reshape(1, 3),[m
+                     is_global=True,[m
+                 )[m
+[36m@@ -3250,6 +3462,69 @@[m [mdef main() -> None:[m
+         and not presentation_smoke_reset_verified[m
+     ):[m
+         raise RuntimeError("PRESENTATION_RESET_SMOKE_FAILED")[m
+[32m+[m[32m    if tracksoil_conservation_audit is not None:[m
+[32m+[m[32m        audit_result = tracksoil_conservation_audit.report()[m
+[32m+[m[32m        audit_result["run_dir"] = str(run_dir)[m
+[32m+[m[32m        audit_result["runtime_backend"] = CONFIG.runtime_backend[m
+[32m+[m[32m        audit_result["state_authority"] = "DEVICE"[m
+[32m+[m[32m        audit_result["grid_shape_yx"] = list(CONFIG.grid_shape)[m
+[32m+[m[32m        audit_result["grid_resolution_m"] = CONFIG.grid_spacing_m[m
+[32m+[m[32m        audit_result["physics_parameters_changed"] = [][m
+[32m+[m[32m        audit_result["mobile_v2_changed"] = bool([m
+[32m+[m[32m            ARGS.mobile_v2_dual_cv_audit is not None[m
+[32m+[m[32m        )[m
+[32m+[m[32m        audit_result["failuresurface_v3_changed"] = False[m
+[32m+[m[32m        audit_result["curl_scoop_trajectory_changed"] = False[m
+[32m+[m[32m        per_run_audit = run_dir / "tracksoil_conservation_causal_report.json"[m
+[32m+[m[32m        per_run_audit.write_text([m
+[32m+[m[32m            json.dumps(audit_result, indent=2) + "\n", encoding="utf-8"[m
+[32m+[m[32m        )[m
+[32m+[m[32m        if ARGS.mobile_v2_dual_cv_audit is not None:[m
+[32m+[m[32m            dual_cv_target = ARGS.mobile_v2_dual_cv_audit.expanduser().resolve()[m
+[32m+[m[32m            dual_cv_target.parent.mkdir(parents=True, exist_ok=True)[m
+[32m+[m[32m            dual_cv_target.write_text([m
+[32m+[m[32m                json.dumps(audit_result, indent=2) + "\n", encoding="utf-8"[m
+[32m+[m[32m            )[m
+[32m+[m[32m            # P0-2A canonical artifacts are frozen causal evidence.  The[m
+[32m+[m[32m            # remainder of this legacy export block is intentionally skipped[m
+[32m+[m[32m            # for P0-2B so a validation replay cannot overwrite them.[m
+[32m+[m[32m        else:[m
+[32m+[m[32m            canonical_audit_dir = ROOT / "outputs/mobile_v2_production"[m
+[32m+[m[32m            canonical_audit_dir.mkdir(parents=True, exist_ok=True)[m
+[32m+[m[32m            (canonical_audit_dir / "tracksoil_conservation_timeseries.json").write_text([m
+[32m+[m[32m                json.dumps([m
+[32m+[m[32m                    {[m
+[32m+[m[32m                        "schema": audit_result["schema"],[m
+[32m+[m[32m                        "run_dir": str(run_dir),[m
+[32m+[m[32m                        "records": audit_result["records"],[m
+[32m+[m[32m                    },[m
+[32m+[m[32m                    indent=2,[m
+[32m+[m[32m                )[m
+[32m+[m[32m                + "\n",[m
+[32m+[m[32m                encoding="utf-8",[m
+[32m+[m[32m            )[m
+[32m+[m[32m            (canonical_audit_dir / "tracksoil_first_bad_step.json").write_text([m
+[32m+[m[32m                json.dumps([m
+[32m+[m[32m                    {[m
+[32m+[m[32m                        key: audit_result.get(key)[m
+[32m+[m[32m                        for key in ([m
+[32m+[m[32m                            "schema",[m
+[32m+[m[32m                            "run_dir",[m
+[32m+[m[32m                            "location_threshold_m3",[m
+[32m+[m[32m                            "cut_curl_numerical_floor_m3",[m
+[32m+[m[32m                            "first_bad_step_found",[m
+[32m+[m[32m                            "last_good_boundary",[m
+[32m+[m[32m                            "first_bad_boundary",[m
+[32m+[m[32m                        )[m
+[32m+[m[32m                    },[m
+[32m+[m[32m                    indent=2,[m
+[32m+[m[32m                )[m
+[32m+[m[32m                + "\n",[m
+[32m+[m[32m                encoding="utf-8",[m
+[32m+[m[32m            )[m
+[32m+[m[32m            (canonical_audit_dir / "tracksoil_conservation_causal_report.json").write_text([m
+[32m+[m[32m                json.dumps(audit_result, indent=2) + "\n", encoding="utf-8"[m
+[32m+[m[32m            )[m
+     control.close()[m
+     (run_dir / "track_soil_events.json").write_text([m
+         json.dumps(track_soil_log, indent=2) + "\n", encoding="utf-8"[m

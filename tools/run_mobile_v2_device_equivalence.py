@@ -32,7 +32,8 @@ OUT = ROOT / "outputs/mobile_v2_reference/mobile_v2_cpu_device_equivalence.json"
 def main() -> None:
     config = MobileV2Config()
     cpu = MobileV2ReferenceSolver(config)
-    gpu = WarpMobileV2ReferenceSolver(config)
+    device = os.environ.get("MOBILE_V2_WARP_DEVICE", "cuda:0")
+    gpu = WarpMobileV2ReferenceSolver(config, device=device)
     shape = (41, 41)
     y, x = np.indices(shape)
     cases: dict[str, tuple[MobileV2State, float]] = {}
@@ -87,6 +88,8 @@ def main() -> None:
         "schema": "MOBILE_V2_CPU_DEVICE_EQUIVALENCE/v1",
         "status": status,
         "equations": "IDENTICAL_HYDROSTATIC_RUSANOV_FACE_FLUX_AND_COULOMB_SOURCE",
+        "execution_device": device,
+        "gpu_device_test": device.startswith("cuda"),
         "production_modified": False,
         "cases": records,
     }

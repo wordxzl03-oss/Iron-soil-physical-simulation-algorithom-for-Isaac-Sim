@@ -5,6 +5,8 @@
   "source_boundary_physical_time_s": 3.75,
   "one_combined_continuous_run": true,
   "isaac_or_gui_launched": false,
+  "execution_device": "cpu",
+  "gpu_device_test": false,
   "support_adapter": {
     "mapping": "b_eff := frozen H_free - frozen h_mobile",
     "classification": "UNCALIBRATED_SNAPSHOT_COMPATIBILITY_ADAPTER",
@@ -45,21 +47,21 @@
       "H_free_jump_p99_m": 0.05376661110040863,
       "mobile_volume_m3": 3.080491764148333,
       "moving_mobile_volume_m3": 0.002584783262459807,
-      "mobile_speed_max_m_s": 0.17711889147194715,
+      "mobile_speed_max_m_s": 0.1771188914719472,
       "mobile_speed_p99_m_s": 0.0,
       "energy_j_per_density": {
-        "kinetic": 7.1157533970817395e-06,
-        "gravitational": 6.181555495905074,
+        "kinetic": 7.115753397081737e-06,
+        "gravitational": 6.181555495905072,
         "internal_pressure": 5.080369849434042,
-        "total": 11.261932461092513,
-        "chunk_numerical_residual": -3.174569043578586
+        "total": 11.261932461092512,
+        "chunk_numerical_residual": -3.1745690435785874
       },
       "new_extrema": {
         "count": 1123,
         "max_count": 322,
         "min_count": 801,
-        "above_envelope_volume_m3": 0.10185203946122523,
-        "below_envelope_volume_m3": 0.19382717784037712
+        "above_envelope_volume_m3": 0.10185203946122526,
+        "below_envelope_volume_m3": 0.19382717784037706
       }
     },
     "2p0s": {
@@ -67,7 +69,7 @@
       "mass_error_m3": -1.7763568394002505e-15,
       "minimum_h_m": 0.0,
       "H_free_jump_max_m": 1.2935815894666054,
-      "H_free_jump_p99_m": 0.053680130021602684,
+      "H_free_jump_p99_m": 0.05368013002160269,
       "mobile_volume_m3": 3.0804917641483316,
       "moving_mobile_volume_m3": 0.0,
       "mobile_speed_max_m_s": 0.0,
@@ -77,21 +79,21 @@
         "gravitational": 5.894575032211565,
         "internal_pressure": 5.23591498203192,
         "total": 11.130490014243485,
-        "chunk_numerical_residual": -0.1281584893088779
+        "chunk_numerical_residual": -0.1281584893088761
       },
       "new_extrema": {
         "count": 1252,
         "max_count": 395,
         "min_count": 857,
-        "above_envelope_volume_m3": 0.1202460389687627,
-        "below_envelope_volume_m3": 0.2233955716217414
+        "above_envelope_volume_m3": 0.12024603896876274,
+        "below_envelope_volume_m3": 0.22339557162174142
       }
     },
     "5p0s": {
       "mass_m3": 3.080491764148333,
       "mass_error_m3": -4.440892098500626e-16,
       "minimum_h_m": 0.0,
-      "H_free_jump_max_m": 1.2941487472055657,
+      "H_free_jump_max_m": 1.2941487472055662,
       "H_free_jump_p99_m": 0.05379304611613487,
       "mobile_volume_m3": 3.080491764148333,
       "moving_mobile_volume_m3": 0.0,
@@ -99,10 +101,10 @@
       "mobile_speed_p99_m_s": 0.0,
       "energy_j_per_density": {
         "kinetic": 0.0,
-        "gravitational": 5.777399867107638,
+        "gravitational": 5.777399867107639,
         "internal_pressure": 5.294833534058605,
         "total": 11.072233401166244,
-        "chunk_numerical_residual": -0.05681422873090734
+        "chunk_numerical_residual": -0.05681422873090735
       },
       "new_extrema": {
         "count": 1393,
@@ -117,11 +119,11 @@
   "positivity": "PASS",
   "energy_consistency": "PASS",
   "energy_residuals_j_per_density": [
-    -3.174569043578586,
-    -0.1281584893088779,
-    -0.05681422873090734
+    -3.1745690435785874,
+    -0.1281584893088761,
+    -0.05681422873090735
   ],
   "energy_tolerance_j_per_density": 1.4803273857690203e-07,
-  "wall_time_s": 5.066473082999892,
+  "wall_time_s": 29.088443388000087,
   "production_modified": false
 }

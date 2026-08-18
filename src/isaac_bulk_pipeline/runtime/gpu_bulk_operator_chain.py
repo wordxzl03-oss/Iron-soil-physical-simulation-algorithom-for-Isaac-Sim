@@ -89,7 +89,9 @@ class GpuBulkOperatorChain:
             grid.shape, runtime=state.runtime, tile_size=state.tile_size
         )
         self.frontier.bind_device_state(state)
-        self.failure_zone = DeviceFailureZoneBridge(state, material, grid, integrator)
+        self.failure_zone = DeviceFailureZoneBridge(
+            state, material, grid, integrator, descriptor=descriptor
+        )
         self.intake = DeviceBucketIntakeBridge(state, grid, integrator)
         from ..bulk_exchange.airborne import AirborneParcelModel
 
@@ -112,11 +114,34 @@ class GpuBulkOperatorChain:
         # It exists to make operator causality directly auditable rather than
         # reconstructing intermediate fields from an end-of-step terrain.
         self.audit_state_observer: Callable[[str], None] | None = None
+        self.audit_mobile_substep_observer: (
+            Callable[[int, float, np.ndarray], None] | None
+        ) = None
+        self.audit_tool_contact_observer: Callable[[object], None] | None = None
         self.airborne.audit_state_observer = self._audit_boundary
+        self.failure_zone.audit_state_observer = self._audit_boundary
+        self.mobile.audit_substep_observer = self._audit_mobile_substep
+        self._audit_readback_total_ms = 0.0
 
     def _audit_boundary(self, label: str) -> None:
         if self.audit_state_observer is not None:
+            start = perf_counter()
             self.audit_state_observer(label)
+            self._audit_readback_total_ms += (perf_counter() - start) * 1_000.0
+
+    def _audit_mobile_substep(
+        self, substep_index: int, dt_s: float, diagnostic: np.ndarray
+    ) -> None:
+        if self.audit_mobile_substep_observer is not None:
+            start = perf_counter()
+            self.audit_mobile_substep_observer(substep_index, dt_s, diagnostic)
+            self._audit_readback_total_ms += (perf_counter() - start) * 1_000.0
+
+    @property
+    def audit_readback_total_ms(self) -> float:
+        """Cumulative acceptance-observer wall time; no observer means zero."""
+
+        return float(self._audit_readback_total_ms)
 
     def _record(self, module: str, start: float, dirty_tile_count: int) -> None:
         self._records.append(
@@ -128,13 +153,30 @@ class GpuBulkOperatorChain:
             )
         )
 
-    def step_mobile(self, dt_s: float) -> WarpMobileStep:
+    def step_mobile(
+        self,
+        dt_s: float,
+        *,
+        tool_mobile_contact=None,
+    ) -> WarpMobileStep:
         start = perf_counter()
         self.state.capture_surface_for_dirty_tracking()
-        result = self.mobile.step_resident(dt_s)
+        if self.audit_tool_contact_observer is not None:
+            audit_start = perf_counter()
+            self.audit_tool_contact_observer(tool_mobile_contact)
+            self._audit_readback_total_ms += (
+                perf_counter() - audit_start
+            ) * 1_000.0
+        result = self.mobile.step_resident(
+            dt_s,
+            tool_mobile_contact=tool_mobile_contact,
+            tool_mobile_friction_coefficient=self.material.tool_friction_coefficient,
+        )
         self.state.advance_time(dt_s)
         dirty = self.state.collect_surface_dirty_tiles()
-        self._audit_boundary("AFTER_MOBILE_TRANSPORT")
+        self._audit_boundary(
+            "AFTER_MOBILE_FUSED_FACE_TOPOGRAPHY_TOOL_FRICTION"
+        )
         self._record("Mobile", start, dirty.size)
         return result
 
@@ -149,7 +191,7 @@ class GpuBulkOperatorChain:
         return result
 
     def clear_failure_tool_forcing(self, result: DeviceFailureZoneResult) -> None:
-        self.failure_zone.clear_tool_forcing(result.forcing_flat_indices)
+        self.failure_zone.clear_tool_forcing(result.tool_mobile_contact)
 
     def apply_bucket_intake(
         self,
@@ -160,6 +202,7 @@ class GpuBulkOperatorChain:
     ) -> DeviceIntakeResult:
         start = perf_counter()
         result = self.intake.execute(payload, tool_state, descriptor, dt_s)
+        self._audit_boundary("AFTER_BUCKET_INTAKE")
         self._record("BucketIntake", start, 0)
         return result
 
@@ -205,7 +248,7 @@ class GpuBulkOperatorChain:
             self.material, dt_s, settle_subcell_tail=settle_subcell_tail
         )
         dirty = self.state.collect_surface_dirty_tiles()
-        self._audit_boundary("AFTER_MOBILE_TO_RESTING_DEPOSITION")
+        self._audit_boundary("AFTER_DEPOSITION")
         self._record("Deposition", start, dirty.size)
         return result
 
@@ -279,7 +322,7 @@ class GpuBulkOperatorChain:
                 "track_soil": self.track.diagnostics(),
                 "deposition": self.deposition.diagnostics(),
                 "compact_frontier": self.frontier.diagnostics(),
-                "failure_zone": {"backend": self.failure_zone.backend_identity},
+                "failure_zone": self.failure_zone.diagnostics(),
                 "bucket_intake": {"backend": self.intake.backend_identity},
                 "airborne": {"backend": self.airborne.backend_identity},
                 "large_avalanche": self.large_avalanche.diagnostics(),

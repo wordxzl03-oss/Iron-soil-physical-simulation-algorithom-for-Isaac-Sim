@@ -725,7 +725,21 @@ class EarthmovingPhysicsCore:
             raise RuntimeError("[V2PhysicsCore] GPU runtime was not initialized")
         state.begin_physics_step()
         step_start = perf_counter()
-        timings: dict[str, float] = {}
+        audit_readback_start_ms = chain.audit_readback_total_ms
+        timings: dict[str, float] = {
+            "failure_surface_ms": 0.0,
+            "mobile_transport_ms": 0.0,
+            "tool_mobile_candidate_build_ms": 0.0,
+            "tool_mobile_broadphase_ms": 0.0,
+            "tool_mobile_narrowphase_ms": 0.0,
+            "tool_mobile_closest_point_ms": 0.0,
+            "tool_mobile_impulse_ms": 0.0,
+            "tool_mobile_host_device_sync_ms": 0.0,
+            "intake_ms": 0.0,
+            "deposition_ms": 0.0,
+            "large_avalanche_ms": 0.0,
+            "audit_readback_ms": 0.0,
+        }
         interaction: GpuBulkInteractionResult | None = None
         force_result: SoilForceResult | None = None
         release: GpuDumpReleaseResult | None = None
@@ -805,6 +819,7 @@ class EarthmovingPhysicsCore:
             sweep = self.sweep_builder.build(
                 self.previous_tool_state, tool_state, self.grid, self.descriptor
             )
+            chain._audit_boundary("BEFORE_FAILURE_SURFACE")
             failure = chain.apply_failure_zone(sweep, coupled_tool)
             timings.update(failure.timings_ms)
             timings["bucket_terrain_intersection"] = (
@@ -812,8 +827,42 @@ class EarthmovingPhysicsCore:
             ) * 1_000.0
             try:
                 start = perf_counter()
-                mobile = chain.step_mobile(dt_s)
+                chain._audit_boundary("BEFORE_MOBILE_V2")
+                mobile = chain.step_mobile(
+                    dt_s,
+                    tool_mobile_contact=failure.tool_mobile_contact,
+                )
                 timings["gpu_mobile_layer"] = (perf_counter() - start) * 1_000.0
+                timings["mobile_transport_ms"] = float(
+                    mobile.mobile_transport_and_source_sync_ms
+                )
+                timings["tool_mobile_impulse_ms"] = float(
+                    mobile.tool_mobile_impulse_fused_upper_bound_ms
+                )
+                timings["tool_mobile_host_device_sync_ms"] += float(
+                    mobile.tool_mobile_contact_prepare_dispatch_ms
+                )
+                timings["mobile_nonzero_count"] = float(
+                    mobile.mobile_nonzero_cell_count
+                )
+                timings["material_mask_count"] = float(
+                    failure.tool_mobile_contact.cell_count
+                )
+                timings["mobile_substeps"] = float(mobile.substeps)
+                timings["candidate_triangle_substep_product"] = float(
+                    timings.get("broadphase_pair_count", 0.0) * mobile.substeps
+                )
+                timings["tool_mobile_contact_h2d_bytes"] = float(
+                    mobile.tool_mobile_contact_h2d_bytes
+                )
+                timings["tool_mobile_contact_h2d_transfer_count"] = float(
+                    mobile.tool_mobile_contact_h2d_transfer_count
+                )
+                timings["tool_mobile_total_ms"] = float(
+                    timings.get("tool_mobile_geometry_total_ms", 0.0)
+                    + mobile.tool_mobile_contact_prepare_dispatch_ms
+                    + mobile.tool_mobile_impulse_fused_upper_bound_ms
+                )
             finally:
                 chain.clear_failure_tool_forcing(failure)
             start = perf_counter()
@@ -832,6 +881,7 @@ class EarthmovingPhysicsCore:
             timings["gpu_bucket_intake_total"] = (
                 perf_counter() - start
             ) * 1_000.0
+            timings["intake_ms"] = timings["gpu_bucket_intake_total"]
             budget = MobileMomentumBudget(
                 momentum_before_terrain_kg_m_s=(
                     mobile.momentum_before_terrain_kg_m_s
@@ -854,6 +904,9 @@ class EarthmovingPhysicsCore:
                     + failure.activation_tool_impulse_on_mobile_terrain_ns
                 ),
                 integration_window_s=dt_s,
+                tool_angular_impulse_on_mobile_about_tool_origin_terrain_nms=(
+                    mobile.tool_angular_impulse_on_mobile_about_tool_origin_terrain_nms
+                ),
             )
             start = perf_counter()
             force_result = self.soil_force_model.compute(
@@ -904,6 +957,13 @@ class EarthmovingPhysicsCore:
             start = perf_counter()
             mobile = chain.step_mobile(dt_s)
             timings["mobile_transport"] = (perf_counter() - start) * 1_000.0
+            timings["mobile_transport_ms"] = float(
+                mobile.mobile_transport_and_source_sync_ms
+            )
+            timings["mobile_nonzero_count"] = float(
+                mobile.mobile_nonzero_cell_count
+            )
+            timings["mobile_substeps"] = float(mobile.substeps)
             start = perf_counter()
             deposition = chain.step_deposition(
                 dt_s,
@@ -913,6 +973,7 @@ class EarthmovingPhysicsCore:
                 ),
             )
             timings["deposition"] = (perf_counter() - start) * 1_000.0
+            timings["deposition_ms"] = timings["deposition"]
             # Landing points are provenance, not proof of instability.  The
             # cohesive device yield pass below supplies residual frontier seeds
             # only when the deposited free surface is physically unstable.
@@ -963,6 +1024,7 @@ class EarthmovingPhysicsCore:
             dt_s, release_settled_latches=True
         )
         timings["large_avalanche"] = (perf_counter() - start) * 1_000.0
+        timings["large_avalanche_ms"] = timings["large_avalanche"]
         if avalanche_transition.residual_seed_tile_ids.size:
             # These are compact candidate tiles only.  They are never allowed
             # to own the state while the current cohesive Y_start detector is
@@ -1011,6 +1073,12 @@ class EarthmovingPhysicsCore:
         start = perf_counter()
         snapshot = metadata.snapshot(state)
         timings["mass_ledger_post"] = (perf_counter() - start) * 1_000.0
+        timings["device_scalar_ledger_readback_ms"] = (
+            timings["mass_ledger_pre"] + timings["mass_ledger_post"]
+        )
+        timings["audit_readback_ms"] = (
+            chain.audit_readback_total_ms - audit_readback_start_ms
+        )
         active = bool(
             snapshot.material_ledger.mobile_m3
             >= self.avalanche_controller.config.mobile_activity_volume_m3
@@ -1061,6 +1129,7 @@ class EarthmovingPhysicsCore:
         )
         self.previous_tool_state = tool_state
         timings["physics_core_total"] = (perf_counter() - step_start) * 1_000.0
+        chain._audit_boundary("END_BULK_CORE")
         state.assert_normal_step_transfer_budget()
         transfer = state.transfer_snapshot()
         self._physical_simulation_time_s += float(dt_s)

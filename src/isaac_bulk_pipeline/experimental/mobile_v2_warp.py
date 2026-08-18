@@ -28,17 +28,35 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
         h: wp.array(dtype=wp.float64),
         qx: wp.array(dtype=wp.float64),
         qy: wp.array(dtype=wp.float64),
+        weights: wp.array(dtype=wp.float64),
+        rows: int,
+        cols: int,
+        dx: wp.float64,
+        dy: wp.float64,
         K: wp.float64,
         g: wp.float64,
         dry: wp.float64,
-        maximum: wp.array(dtype=wp.float64),
+        maxima: wp.array(dtype=wp.float64),
     ):
         i = wp.tid()
         depth = h[i]
         if depth > dry:
             vx = qx[i] / depth
             vy = qy[i] / depth
-            wp.atomic_max(maximum, 0, wp.sqrt(vx * vx + vy * vy) + wp.sqrt(K * g * depth))
+            wave = wp.sqrt(vx * vx + vy * vy) + wp.sqrt(K * g * depth)
+            row = i // cols
+            col = i - row * cols
+            # A face flux is per unit face length.  The most restrictive
+            # local height rate is wave * L_face / A_i.  This reduces exactly
+            # to wave/min(dx,dy) for equal-area interior vertices and becomes
+            # appropriately stricter for smaller Triangle-A-C edge/corner CVs.
+            inverse_length = wp.float64(0.0)
+            if col > 0 or col + 1 < cols:
+                inverse_length = wp.max(inverse_length, dy / weights[i])
+            if row > 0 or row + 1 < rows:
+                inverse_length = wp.max(inverse_length, dx / weights[i])
+            wp.atomic_max(maxima, 0, wave * inverse_length)
+            wp.atomic_max(maxima, 1, wave)
 
     @wp.kernel
     def clear_updates(
@@ -57,6 +75,7 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
         h: wp.array(dtype=wp.float64),
         qx: wp.array(dtype=wp.float64),
         qy: wp.array(dtype=wp.float64),
+        weights: wp.array(dtype=wp.float64),
         dh: wp.array(dtype=wp.float64),
         dqx: wp.array(dtype=wp.float64),
         dqy: wp.array(dtype=wp.float64),
@@ -74,14 +93,14 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
         left = int(0)
         right = int(0)
         normal = int(0)
-        spacing = dx
+        face_length = dy
         if edge < x_edges:
             row = edge // (cols - 1)
             col = edge - row * (cols - 1)
             left = row * cols + col
             right = left + 1
             normal = 0
-            spacing = dx
+            face_length = dy
         else:
             local = edge - x_edges
             row = local // cols
@@ -89,7 +108,7 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
             left = row * cols + col
             right = left + cols
             normal = 1
-            spacing = dy
+            face_length = dx
         hl = h[left]
         hr = h[right]
         head_l = b[left] + K * hl
@@ -165,13 +184,17 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
         else:
             flux_l_qy = flux_l_qy + corr_l
             flux_r_qy = flux_r_qy + corr_r
-        factor = dt / spacing
-        wp.atomic_add(dh, left, -factor * flux_h)
-        wp.atomic_add(dh, right, factor * flux_h)
-        wp.atomic_add(dqx, left, -factor * flux_l_qx)
-        wp.atomic_add(dqx, right, factor * flux_r_qx)
-        wp.atomic_add(dqy, left, -factor * flux_l_qy)
-        wp.atomic_add(dqy, right, factor * flux_r_qy)
+        # One shared face transfer is integrated once, then divided by each
+        # endpoint's authoritative dual-control area.  Mass and the shared
+        # advective/pressure momentum flux are thus weighted conservative.
+        scale_l = dt * face_length / weights[left]
+        scale_r = dt * face_length / weights[right]
+        wp.atomic_add(dh, left, -scale_l * flux_h)
+        wp.atomic_add(dh, right, scale_r * flux_h)
+        wp.atomic_add(dqx, left, -scale_l * flux_l_qx)
+        wp.atomic_add(dqx, right, scale_r * flux_r_qx)
+        wp.atomic_add(dqy, left, -scale_l * flux_l_qy)
+        wp.atomic_add(dqy, right, scale_r * flux_r_qy)
 
     @wp.kernel
     def apply_update_and_sources(
@@ -183,20 +206,40 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
         dqy: wp.array(dtype=wp.float64),
         external_x: wp.array(dtype=wp.float64),
         external_y: wp.array(dtype=wp.float64),
+        tool_contact_mask: wp.array(dtype=wp.int32),
+        tool_normal_x: wp.array(dtype=wp.float64),
+        tool_normal_y: wp.array(dtype=wp.float64),
+        tool_velocity_x: wp.array(dtype=wp.float64),
+        tool_velocity_y: wp.array(dtype=wp.float64),
+        tool_contact_point_x: wp.array(dtype=wp.float64),
+        tool_contact_point_y: wp.array(dtype=wp.float64),
+        tool_contact_point_z: wp.array(dtype=wp.float64),
+        weights: wp.array(dtype=wp.float64),
         dt: wp.float64,
         g: wp.float64,
         mu: wp.float64,
+        tool_mu: wp.float64,
+        tool_reference_x: wp.float64,
+        tool_reference_y: wp.float64,
+        tool_reference_z: wp.float64,
         dry: wp.float64,
         diagnostics: wp.array(dtype=wp.float64),
     ):
         i = wp.tid()
         old_qx = qx[i]
         old_qy = qy[i]
-        depth = wp.max(h[i] + dh[i], wp.float64(0.0))
+        raw_depth = h[i] + dh[i]
+        if raw_depth < wp.float64(0.0):
+            # Positivity must come from the metric-aware CFL.  This diagnostic
+            # makes any non-roundoff violation fatal on the host instead of
+            # silently using clipping as a mass correction.
+            wp.atomic_add(diagnostics, 8, -raw_depth * weights[i])
+        depth = wp.max(raw_depth, wp.float64(0.0))
         cx = old_qx + dqx[i]
         cy = old_qy + dqy[i]
-        wp.atomic_add(diagnostics, 0, cx - old_qx)
-        wp.atomic_add(diagnostics, 1, cy - old_qy)
+        weight = weights[i]
+        wp.atomic_add(diagnostics, 0, (cx - old_qx) * weight)
+        wp.atomic_add(diagnostics, 1, (cy - old_qy) * weight)
         if depth <= dry:
             h[i] = depth
             qx[i] = wp.float64(0.0)
@@ -204,14 +247,91 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
             return
         vx0 = cx / depth
         vy0 = cy / depth
-        vx1 = vx0 + external_x[i] * dt
-        vy1 = vy0 + external_y[i] * dt
-        wp.atomic_add(diagnostics, 2, depth * (vx1 - vx0))
-        wp.atomic_add(diagnostics, 3, depth * (vy1 - vy0))
+        vx_contact = vx0
+        vy_contact = vy0
+        if tool_contact_mask[i] != 0:
+            nx = tool_normal_x[i]
+            ny = tool_normal_y[i]
+            tvx = tool_velocity_x[i]
+            tvy = tool_velocity_y[i]
+            relative_x = vx0 - tvx
+            relative_y = vy0 - tvy
+            closing = relative_x * nx + relative_y * ny
+            if closing < wp.float64(0.0):
+                normal_delta = -closing
+                tangent_x = -ny
+                tangent_y = nx
+                slip = relative_x * tangent_x + relative_y * tangent_y
+                tangent_delta_magnitude = wp.min(wp.abs(slip), tool_mu * normal_delta)
+                tangent_delta = wp.float64(0.0)
+                if slip > wp.float64(0.0):
+                    tangent_delta = -tangent_delta_magnitude
+                elif slip < wp.float64(0.0):
+                    tangent_delta = tangent_delta_magnitude
+                delta_vx = normal_delta * nx + tangent_delta * tangent_x
+                delta_vy = normal_delta * ny + tangent_delta * tangent_y
+                vx_contact = vx0 + delta_vx
+                vy_contact = vy0 + delta_vy
+                impulse_x = depth * delta_vx * weight
+                impulse_y = depth * delta_vy * weight
+                normal_impulse = depth * normal_delta * weight
+                tangent_impulse = depth * wp.abs(tangent_delta) * weight
+                impulse_magnitude = wp.sqrt(
+                    impulse_x * impulse_x + impulse_y * impulse_y
+                )
+                kinetic_change = (
+                    wp.float64(0.5) * depth
+                    * (
+                        vx_contact * vx_contact + vy_contact * vy_contact
+                        - vx0 * vx0 - vy0 * vy0
+                    )
+                    * weight
+                )
+                tool_work = impulse_x * tvx + impulse_y * tvy
+                slip_after = (
+                    (vx_contact - tvx) * tangent_x
+                    + (vy_contact - tvy) * tangent_y
+                )
+                friction_dissipation = (
+                    wp.float64(0.5) * depth
+                    * wp.max(wp.float64(0.0), slip * slip - slip_after * slip_after)
+                    * weight
+                )
+                rx = tool_contact_point_x[i] - tool_reference_x
+                ry = tool_contact_point_y[i] - tool_reference_y
+                rz = tool_contact_point_z[i] - tool_reference_z
+                wp.atomic_add(diagnostics, 9, impulse_x)
+                wp.atomic_add(diagnostics, 10, impulse_y)
+                wp.atomic_add(diagnostics, 11, normal_impulse)
+                wp.atomic_add(diagnostics, 12, tangent_impulse)
+                wp.atomic_add(diagnostics, 13, kinetic_change)
+                wp.atomic_add(diagnostics, 14, tool_work)
+                wp.atomic_add(diagnostics, 15, friction_dissipation)
+                wp.atomic_add(diagnostics, 16, -rz * impulse_y)
+                wp.atomic_add(diagnostics, 17, rz * impulse_x)
+                wp.atomic_add(diagnostics, 18, rx * impulse_y - ry * impulse_x)
+                wp.atomic_add(diagnostics, 19, wp.float64(1.0))
+                wp.atomic_add(diagnostics, 20, depth * weight)
+                wp.atomic_add(diagnostics, 21, weight)
+                wp.atomic_add(diagnostics, 22, tool_contact_point_x[i] * impulse_magnitude)
+                wp.atomic_add(diagnostics, 23, tool_contact_point_y[i] * impulse_magnitude)
+                wp.atomic_add(diagnostics, 24, tool_contact_point_z[i] * impulse_magnitude)
+                wp.atomic_add(diagnostics, 25, impulse_magnitude)
+                wp.atomic_add(diagnostics, 26, tool_work - kinetic_change)
+
+        # General external acceleration remains a separate source.  Tool
+        # contact is an impulse above, not a hidden acceleration field.
+        vx1 = vx_contact + external_x[i] * dt
+        vy1 = vy_contact + external_y[i] * dt
+        wp.atomic_add(diagnostics, 2, depth * (vx1 - vx_contact) * weight)
+        wp.atomic_add(diagnostics, 3, depth * (vy1 - vy_contact) * weight)
         wp.atomic_add(
             diagnostics, 6,
             wp.float64(0.5) * depth
-            * (vx1 * vx1 + vy1 * vy1 - vx0 * vx0 - vy0 * vy0),
+            * (
+                vx1 * vx1 + vy1 * vy1
+                - vx_contact * vx_contact - vy_contact * vy_contact
+            ) * weight,
         )
         speed = wp.sqrt(vx1 * vx1 + vy1 * vy1)
         factor = wp.float64(0.0)
@@ -219,12 +339,12 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
             factor = wp.max(wp.float64(0.0), wp.float64(1.0) - mu * g * dt / speed)
         vx2 = vx1 * factor
         vy2 = vy1 * factor
-        wp.atomic_add(diagnostics, 4, depth * (vx2 - vx1))
-        wp.atomic_add(diagnostics, 5, depth * (vy2 - vy1))
+        wp.atomic_add(diagnostics, 4, depth * (vx2 - vx1) * weight)
+        wp.atomic_add(diagnostics, 5, depth * (vy2 - vy1) * weight)
         wp.atomic_add(
             diagnostics, 7,
             wp.float64(0.5) * depth
-            * (vx1 * vx1 + vy1 * vy1 - vx2 * vx2 - vy2 * vy2),
+            * (vx1 * vx1 + vy1 * vy1 - vx2 * vx2 - vy2 * vy2) * weight,
         )
         h[i] = depth
         qx[i] = depth * vx2
@@ -262,8 +382,21 @@ class WarpMobileV2ReferenceSolver:
             rt.upload(name, np.asarray(value).ravel(), dtype=wp.float64)
         for name in ("v2_dh", "v2_dqx", "v2_dqy"):
             rt.zeros(name, size, dtype=wp.float64)
+        rt.upload(
+            "v2_weights",
+            np.full(size, config.dx_m * config.dy_m, dtype=np.float64),
+            dtype=wp.float64,
+        )
         rt.zeros("v2_external_x", size, dtype=wp.float64)
         rt.zeros("v2_external_y", size, dtype=wp.float64)
+        rt.zeros("v2_tool_contact_mask", size, dtype=wp.int32)
+        for name in (
+            "v2_tool_normal_x", "v2_tool_normal_y",
+            "v2_tool_velocity_x", "v2_tool_velocity_y",
+            "v2_tool_contact_point_x", "v2_tool_contact_point_y",
+            "v2_tool_contact_point_z",
+        ):
+            rt.zeros(name, size, dtype=wp.float64)
         initial = MobileV2State(
             np.array(state.b_eff_m, copy=True), np.array(state.h_m, copy=True),
             np.array(state.q_m2_s, copy=True),
@@ -285,45 +418,65 @@ class WarpMobileV2ReferenceSolver:
         remaining = float(dt_s)
         substeps = 0
         max_cfl = 0.0
-        diagnostics_total = np.zeros(8)
+        diagnostics_total = np.zeros(27)
         while remaining > 1.0e-14:
             if substeps >= config.maximum_substeps:
                 raise RuntimeError("Warp MobileV2 maximum_substeps exceeded")
-            maximum = wp.zeros(1, dtype=wp.float64, device=rt.device)
+            maximum = wp.zeros(2, dtype=wp.float64, device=rt.device)
             rt.launch(kernels[0], dim=size, inputs=[
                 rt.arrays["v2_h"], rt.arrays["v2_qx"], rt.arrays["v2_qy"],
+                rt.arrays["v2_weights"], rows, cols, config.dx_m, config.dy_m,
                 config.earth_pressure_coefficient, config.gravity_m_s2,
                 config.dry_tolerance_m, maximum,
             ])
             rt.synchronize()
-            wave = float(np.asarray(maximum.numpy())[0])
+            maxima = np.asarray(maximum.numpy())
+            metric_rate = float(maxima[0])
+            wave = float(maxima[1])
             stable = (
-                remaining if wave <= 1.0e-14
-                else config.cfl * min(config.dx_m, config.dy_m) / wave
+                remaining if metric_rate <= 1.0e-14
+                else config.cfl / metric_rate
             )
             sub_dt = min(remaining, stable)
-            max_cfl = max(max_cfl, wave * sub_dt / min(config.dx_m, config.dy_m))
+            max_cfl = max(max_cfl, metric_rate * sub_dt)
             rt.launch(kernels[1], dim=size, inputs=[
                 rt.arrays["v2_dh"], rt.arrays["v2_dqx"], rt.arrays["v2_dqy"],
             ])
             rt.launch(kernels[2], dim=edge_count, inputs=[
                 rt.arrays["v2_b"], rt.arrays["v2_h"],
                 rt.arrays["v2_qx"], rt.arrays["v2_qy"],
+                rt.arrays["v2_weights"],
                 rt.arrays["v2_dh"], rt.arrays["v2_dqx"], rt.arrays["v2_dqy"],
                 rows, cols, x_edges, config.dx_m, config.dy_m, sub_dt,
                 config.earth_pressure_coefficient, config.gravity_m_s2,
                 config.dry_tolerance_m,
             ])
-            diagnostics = wp.zeros(8, dtype=wp.float64, device=rt.device)
+            diagnostics = wp.zeros(27, dtype=wp.float64, device=rt.device)
             rt.launch(kernels[3], dim=size, inputs=[
                 rt.arrays["v2_h"], rt.arrays["v2_qx"], rt.arrays["v2_qy"],
                 rt.arrays["v2_dh"], rt.arrays["v2_dqx"], rt.arrays["v2_dqy"],
                 rt.arrays["v2_external_x"], rt.arrays["v2_external_y"],
+                rt.arrays["v2_tool_contact_mask"],
+                rt.arrays["v2_tool_normal_x"], rt.arrays["v2_tool_normal_y"],
+                rt.arrays["v2_tool_velocity_x"], rt.arrays["v2_tool_velocity_y"],
+                rt.arrays["v2_tool_contact_point_x"],
+                rt.arrays["v2_tool_contact_point_y"],
+                rt.arrays["v2_tool_contact_point_z"],
+                rt.arrays["v2_weights"],
                 sub_dt, config.gravity_m_s2, config.basal_friction_coefficient,
+                wp.float64(0.0), wp.float64(0.0), wp.float64(0.0), wp.float64(0.0),
                 config.dry_tolerance_m, diagnostics,
             ])
             rt.synchronize()
             diagnostics_total += np.asarray(diagnostics.numpy(), dtype=np.float64)
+            positivity_tolerance_m3 = (
+                128.0 * np.finfo(np.float64).eps * max(1.0, m0)
+            )
+            if diagnostics_total[8] > positivity_tolerance_m3:
+                raise RuntimeError(
+                    "Warp MobileV2 metric-aware CFL positivity failure: "
+                    f"clipped_volume_m3={diagnostics_total[8]:.17g}"
+                )
             remaining -= sub_dt
             substeps += 1
         h = rt.download("v2_h").reshape(shape)
@@ -332,13 +485,12 @@ class WarpMobileV2ReferenceSolver:
             axis=-1,
         )
         final = MobileV2State(np.array(state.b_eff_m, copy=True), h, q)
-        area = config.dx_m * config.dy_m
         return self.reference._result(
             initial, final, float(dt_s), substeps, max_cfl, m0, p0,
-            diagnostics_total[0:2] * area,
-            diagnostics_total[4:6] * area,
-            diagnostics_total[2:4] * area,
+            diagnostics_total[0:2],
+            diagnostics_total[4:6],
+            diagnostics_total[2:4],
             k0, g0, i0, e0,
-            float(diagnostics_total[7] * area),
-            float(diagnostics_total[6] * area),
+            float(diagnostics_total[7]),
+            float(diagnostics_total[6]),
         )

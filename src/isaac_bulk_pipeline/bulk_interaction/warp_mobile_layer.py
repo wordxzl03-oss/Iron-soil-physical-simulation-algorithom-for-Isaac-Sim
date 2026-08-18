@@ -7,7 +7,7 @@ therefore visible in telemetry.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -369,6 +369,31 @@ class WarpMobileStep:
     receiver_import_m3: float
     transport_mass_residual_m3: float
     advected_momentum_crossings_kg_m_s: np.ndarray
+    tool_normal_impulse_ns: float = 0.0
+    tool_tangential_impulse_ns: float = 0.0
+    tool_angular_impulse_on_mobile_about_tool_origin_terrain_nms: np.ndarray = field(
+        default_factory=lambda: np.zeros(3, dtype=np.float64)
+    )
+    tool_contact_centroid_terrain_m: np.ndarray = field(
+        default_factory=lambda: np.zeros(3, dtype=np.float64)
+    )
+    tool_frictional_dissipation_j: float = 0.0
+    tool_contact_dissipation_j: float = 0.0
+    machine_reaction_work_j: float = 0.0
+    tool_contact_active_substeps: int = 0
+    tool_contact_active_cell_substeps: int = 0
+    peak_tool_contact_mobile_volume_m3: float = 0.0
+    tool_contact_substep_diagnostics: tuple[dict[str, object], ...] = ()
+    mobile_nonzero_cell_count: int = 0
+    tool_mobile_contact_prepare_dispatch_ms: float = 0.0
+    tool_mobile_contact_h2d_bytes: int = 0
+    tool_mobile_contact_h2d_transfer_count: int = 0
+    mobile_summary_sync_ms: float = 0.0
+    mobile_cfl_measure_sync_ms: float = 0.0
+    mobile_transport_and_source_sync_ms: float = 0.0
+    tool_mobile_impulse_fused_upper_bound_ms: float = 0.0
+    mobile_step_total_ms: float = 0.0
+    tool_mobile_impulse_timing_scope: str = "FUSED_WITH_TRANSPORT_AND_LOCAL_SOURCES"
 
 
 class WarpMobileLayerSolver:

@@ -122,6 +122,12 @@ PARSER.add_argument(
     help="local GUI demo: pause nine simulation seconds after DEPOSITION entry",
 )
 PARSER.add_argument(
+    "--presentation-fixed-camera",
+    choices=("oblique", "side"),
+    default=None,
+    help="visual-only fixed camera for a clean production replay",
+)
+PARSER.add_argument(
     "--final-presentation-config",
     type=Path,
     default=None,
@@ -183,6 +189,75 @@ PARSER.add_argument(
     default=None,
     help="write one read-only CUT_AND_FILL payload causal audit and start checkpoint",
 )
+PARSER.add_argument(
+    "--realistic-cut-scoop",
+    action=argparse.BooleanOptionalAction,
+    default=None,
+    help=(
+        "replace the legacy fixed CUT target by the audited continuous A-E "
+        "curl-scoop target schedule; physics and task gates remain unchanged"
+    ),
+)
+PARSER.add_argument(
+    "--tracksoil-conservation-audit",
+    action="store_true",
+    help=(
+        "acceptance-only per-operator DEVICE scalar ledger from post CUT/CURL "
+        "through PRE_DUMP; does not alter terrain physics"
+    ),
+)
+PARSER.add_argument(
+    "--mobile-v2-dual-cv-audit",
+    type=Path,
+    default=None,
+    help=(
+        "P0-2B acceptance-only per-operator DEVICE ledger output; reuses the "
+        "P0-2A observer without overwriting its frozen causal artifacts"
+    ),
+)
+PARSER.add_argument(
+    "--mobile-first-write-audit",
+    type=Path,
+    default=None,
+    help=(
+        "read-only authoritative DEVICE full-state audit over t=5.45..5.75 s; "
+        "autostarts one diagnostic trajectory and exits after writing the report"
+    ),
+)
+PARSER.add_argument(
+    "--mobile-first-write-visual-diagnostic",
+    action="store_true",
+    help=(
+        "optional non-physical USD overlays for the first-write audit; requires "
+        "a GUI and reads the same authoritative DEVICE audit snapshots"
+    ),
+)
+PARSER.add_argument(
+    "--tool-mobile-validity-audit",
+    type=Path,
+    default=None,
+    help=(
+        "diagnostic-only P0-2D physical-validity run through four seconds after "
+        "first Mobile creation; writes compact contact and synchronized CUT telemetry"
+    ),
+)
+PARSER.add_argument(
+    "--tool-mobile-impulse-ablation",
+    choices=("ON", "OFF"),
+    default="ON",
+    help=(
+        "counterfactual used only with --tool-mobile-validity-audit; OFF retains "
+        "exact contact geometry/telemetry but removes tool impulse and reaction"
+    ),
+)
+PARSER.add_argument(
+    "--tool-mobile-validity-visual-diagnostic",
+    action="store_true",
+    help=(
+        "non-headless authoritative Mobile/contact overlay and fixed-camera frame "
+        "capture for --tool-mobile-validity-audit"
+    ),
+)
 ARGS, _UNKNOWN = PARSER.parse_known_args()
 if ARGS.dump_plus_9_checkpoint is not None and ARGS.dump_after_checkpoint is None:
     raise ValueError("--dump-plus-9-checkpoint requires --dump-after-checkpoint")
@@ -220,6 +295,11 @@ if ARGS.avalanche_sensitivity != "nominal":
         f"{ARGS.avalanche_sensitivity}_uncalibrated"
     )
     CONFIG = replace(CONFIG, large_avalanche_transition=transition)
+REALISTIC_CUT_SCOOP = (
+    CONFIG.realistic_cut_scoop_enabled
+    if ARGS.realistic_cut_scoop is None
+    else bool(ARGS.realistic_cut_scoop)
+)
 HEADLESS = CONFIG.headless if ARGS.headless is None else bool(ARGS.headless)
 PRESENTATION_DEMO = bool(ARGS.presentation_demo)
 FINAL_PRESENTATION = ARGS.final_presentation_config is not None
@@ -276,6 +356,40 @@ if ARGS.cut_fill_payload_audit is not None and (
     raise ValueError(
         "--cut-fill-payload-audit requires --headless --acceptance-cycles 1 and GPU_RUNTIME"
     )
+if (ARGS.tracksoil_conservation_audit or ARGS.mobile_v2_dual_cv_audit is not None) and (
+    not HEADLESS
+    or ARGS.acceptance_cycles != 1
+    or CONFIG.runtime_backend != "GPU_RUNTIME"
+    or ARGS.mobile_v2_pre_dump_acceptance is None
+):
+    raise ValueError(
+        "ledger conservation audit requires --headless --acceptance-cycles 1 "
+        "--mobile-v2-pre-dump-acceptance PATH and GPU_RUNTIME"
+    )
+if ARGS.mobile_first_write_audit is not None and (
+    CONFIG.runtime_backend != "GPU_RUNTIME"
+):
+    raise ValueError(
+        "--mobile-first-write-audit requires GPU_RUNTIME"
+    )
+if ARGS.mobile_first_write_visual_diagnostic and (
+    ARGS.mobile_first_write_audit is None or HEADLESS
+):
+    raise ValueError(
+        "--mobile-first-write-visual-diagnostic requires "
+        "--mobile-first-write-audit PATH and --no-headless"
+    )
+if ARGS.tool_mobile_validity_audit is None and (
+    ARGS.tool_mobile_impulse_ablation != "ON"
+    or ARGS.tool_mobile_validity_visual_diagnostic
+):
+    raise ValueError(
+        "tool-Mobile ablation/visual flags require --tool-mobile-validity-audit PATH"
+    )
+if ARGS.tool_mobile_validity_audit is not None and CONFIG.runtime_backend != "GPU_RUNTIME":
+    raise ValueError("--tool-mobile-validity-audit requires GPU_RUNTIME")
+if ARGS.tool_mobile_validity_visual_diagnostic and HEADLESS:
+    raise ValueError("--tool-mobile-validity-visual-diagnostic requires --no-headless")
 
 MANUAL_PRESENTATION_GUI = bool(
     PRESENTATION_DEMO
@@ -427,6 +541,7 @@ def _set_presentation_camera(index: int) -> None:
         ),
         2: (np.asarray([12.5, -10.5, 7.0]), np.asarray([5.4, 0.2, 1.8])),
         3: (np.asarray([20.0, -10.0, 10.0]), np.asarray([8.0, 1.0, 2.2])),
+        4: (np.asarray([5.5, -27.0, 8.0]), np.asarray([5.5, 0.0, 2.2])),
     }
     eye, target = views.get(int(index), views[1])
     try:
@@ -704,6 +819,18 @@ def main() -> None:
     from isaac_bulk_pipeline.runtime.cut_fill_payload_audit import (
         CutFillPayloadCausalAudit,
     )
+    from isaac_bulk_pipeline.runtime.curl_scoop_trajectory import (
+        RealisticCurlScoopTrajectory,
+    )
+    from isaac_bulk_pipeline.runtime.tracksoil_conservation_audit import (
+        TrackSoilConservationAudit,
+    )
+    from isaac_bulk_pipeline.runtime.mobile_first_write_audit import (
+        IsaacMobileFirstWriteVisualization, MobileFirstWriteAudit,
+    )
+    from isaac_bulk_pipeline.runtime.tool_mobile_validity_audit import (
+        ToolMobilePhysicalValidityAudit,
+    )
     from isaac_bulk_pipeline.terrain import HeightmapIO, TerrainGrid
     from isaac_bulk_pipeline.tools import ToolDescriptorLoader, ToolKinematicsAdapter
     from isaac_bulk_pipeline.vehicle import (
@@ -719,6 +846,7 @@ def main() -> None:
         ChunkedDynamicMeshAdapter, LightingManager, TerrainMaterialAdapter,
     )
 
+
     run_id = f"run_{int(time())}"
     run_dir = CONFIG.output_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -729,6 +857,16 @@ def main() -> None:
     presentation_screenshot_dir = presentation_run_dir / "screenshots"
     if FINAL_PRESENTATION:
         presentation_screenshot_dir.mkdir(parents=True, exist_ok=True)
+    tool_mobile_validity_frame_dir = (
+        None
+        if ARGS.tool_mobile_validity_audit is None
+        else ARGS.tool_mobile_validity_audit.expanduser().resolve().with_suffix("").with_name(
+            ARGS.tool_mobile_validity_audit.expanduser().resolve().stem + "_frames"
+        )
+    )
+    if ARGS.tool_mobile_validity_visual_diagnostic:
+        assert tool_mobile_validity_frame_dir is not None
+        tool_mobile_validity_frame_dir.mkdir(parents=True, exist_ok=True)
     failure_path = run_dir / "runtime_failure.json"
     manifest_path = run_dir / "runtime_manifest.json"
     telemetry_path = run_dir / "runtime_telemetry.json"
@@ -881,7 +1019,9 @@ def main() -> None:
     right_track = world.scene.add(RigidPrim(CONFIG.right_track_body, name="interactive_right_track", reset_xform_properties=False))
     lower_body = world.scene.add(RigidPrim(CONFIG.lower_body, name="interactive_lower_body", reset_xform_properties=False))
     bucket_force_body = world.scene.add(RigidPrim(CONFIG.bucket_link, name="interactive_bucket_force", reset_xform_properties=False))
-    articulation.set_joints_default_state(positions=np.asarray(CONFIG.phase_targets_rad["initial_pose"], dtype=np.float64))
+    articulation.set_joints_default_state(
+        positions=np.asarray(CONFIG.phase_targets_rad["initial_pose"], dtype=np.float64)
+    )
     world.reset()
     if not HEADLESS:
         world.pause()
@@ -1132,9 +1272,110 @@ def main() -> None:
             np.asarray(CONFIG.phase_targets_rad["coordinated_cut"], dtype=np.float64),
             CONFIG.physics_dt_s,
         )
-        if ARGS.cut_fill_payload_audit is not None
+        if (
+            ARGS.cut_fill_payload_audit is not None
+            or ARGS.tool_mobile_validity_audit is not None
+        )
         else None
     )
+    realistic_cut_trajectory = (
+        RealisticCurlScoopTrajectory(
+            np.asarray(CONFIG.phase_targets_rad["penetrate"], dtype=np.float64),
+            np.asarray(CONFIG.phase_targets_rad["breakout"], dtype=np.float64),
+        )
+        if REALISTIC_CUT_SCOOP
+        else None
+    )
+    realistic_cut_sample = None
+    tracksoil_conservation_audit = (
+        TrackSoilConservationAudit()
+        if (ARGS.tracksoil_conservation_audit or ARGS.mobile_v2_dual_cv_audit is not None)
+        else None
+    )
+    production_physics_step_count = 0
+    mobile_first_write_audit = (
+        MobileFirstWriteAudit(
+            physics_core.device_state,
+            material,
+            physics_core.gpu_chain.mobile.config,
+            ARGS.mobile_first_write_audit.expanduser().resolve(),
+        )
+        if ARGS.mobile_first_write_audit is not None
+        else None
+    )
+    if mobile_first_write_audit is not None:
+        mobile_first_write_audit.run_id = run_id
+    tool_mobile_validity_audit = (
+        ToolMobilePhysicalValidityAudit(
+            physics_core.device_state,
+            material,
+            physics_core.gpu_chain.mobile.config,
+            descriptor,
+            ARGS.tool_mobile_validity_audit.expanduser().resolve(),
+            impulse_mode=ARGS.tool_mobile_impulse_ablation,
+            observation_horizon_s=(
+                1_000_000.0
+                if ARGS.mobile_v2_pre_dump_acceptance is not None
+                else 4.0
+            ),
+        )
+        if ARGS.tool_mobile_validity_audit is not None
+        else None
+    )
+    if tool_mobile_validity_audit is not None:
+        tool_mobile_validity_audit.run_id = run_id
+        physics_core.gpu_chain.mobile.diagnostic_disable_tool_mobile_impulse = bool(
+            ARGS.tool_mobile_impulse_ablation == "OFF"
+        )
+    tool_mobile_visual_offsets_s = tuple(
+        step / 60.0 for step in (0, 1, 2, 3, 5, 10, 20)
+    )
+    tool_mobile_visual_captured_offsets: set[float] = set()
+    if (
+        mobile_first_write_audit is not None
+        and ARGS.mobile_first_write_visual_diagnostic
+    ):
+        mobile_first_write_audit.visual_observer = (
+            IsaacMobileFirstWriteVisualization(stage, grid, descriptor)
+        )
+        _set_presentation_camera(2)
+    if (
+        tool_mobile_validity_audit is not None
+        and ARGS.tool_mobile_validity_visual_diagnostic
+    ):
+        tool_mobile_validity_audit.visual_observer = (
+            IsaacMobileFirstWriteVisualization(stage, grid, descriptor)
+        )
+        _set_presentation_camera(2)
+    if (
+        tracksoil_conservation_audit is not None
+        or mobile_first_write_audit is not None
+        or tool_mobile_validity_audit is not None
+    ):
+        assert physics_core.gpu_chain is not None
+        def observe_gpu_operator_boundary(label):
+            if tracksoil_conservation_audit is not None:
+                tracksoil_conservation_audit.operator_boundary(
+                    label, physics_core.scalar_state()
+                )
+            if mobile_first_write_audit is not None:
+                mobile_first_write_audit.operator_boundary(label)
+        physics_core.gpu_chain.audit_state_observer = observe_gpu_operator_boundary
+        if mobile_first_write_audit is not None:
+            physics_core.gpu_chain.audit_mobile_substep_observer = (
+                mobile_first_write_audit.mobile_substep_boundary
+            )
+        if tool_mobile_validity_audit is not None:
+            if mobile_first_write_audit is not None:
+                raise RuntimeError(
+                    "MOBILE_FIRST_WRITE_AND_PHYSICAL_VALIDITY_AUDITS_ARE_MUTUALLY_EXCLUSIVE"
+                )
+            physics_core.gpu_chain.audit_mobile_substep_observer = (
+                tool_mobile_validity_audit.mobile_substep_boundary
+            )
+            physics_core.gpu_chain.audit_tool_contact_observer = (
+                tool_mobile_validity_audit.observe_contact_geometry
+            )
     cut_fill_start_checkpoint_written = False
     soil_force_evidence = {
         "computed_peak_n": 0.0,
@@ -1396,6 +1637,11 @@ def main() -> None:
             "support": support_diagnostics,
         }
         track_result = None
+        audit_geometry = {
+            "affected_cell_count": 0,
+            "footprint_area_m2": 0.0,
+            "requested_r2m_m3": 0.0,
+        }
         if control.snapshot().track_soil_enabled and (
             abs(drive_result.applied_left_command) > 1.0e-4
             or abs(drive_result.applied_right_command) > 1.0e-4
@@ -1408,11 +1654,73 @@ def main() -> None:
             forward_xy /= max(float(np.linalg.norm(forward_xy)), 1.0e-12)
             left_mask = left_fp.mask if left_contact else np.zeros(grid.shape, dtype=bool)
             right_mask = right_fp.mask if right_contact else np.zeros(grid.shape, dtype=bool)
+            left_track_velocity_xy = (
+                base_velocity_xy
+                + drive_result.applied_left_command
+                * CONFIG.nominal_track_belt_speed_m_s
+                * forward_xy
+            )
+            right_track_velocity_xy = (
+                base_velocity_xy
+                + drive_result.applied_right_command
+                * CONFIG.nominal_track_belt_speed_m_s
+                * forward_xy
+            )
+            if tracksoil_conservation_audit is not None:
+                track_config = (
+                    physics_core.gpu_chain.track.config
+                    if physics_core.gpu_chain is not None
+                    else physics_core.track_soil_model.config
+                )
+
+                def requested_track_volume(mask, track_velocity):
+                    slip = float(
+                        np.linalg.norm(track_velocity - base_velocity_xy)
+                    )
+                    slip_effect = max(
+                        slip - track_config.minimum_slip_speed_m_s, 0.0
+                    )
+                    requested_depth = min(
+                        track_config.maximum_sinkage_per_step_m,
+                        track_config.sinkage_rate_m_s
+                        * CONFIG.physics_dt_s
+                        * (1.0 + track_config.slip_gain * slip_effect),
+                    )
+                    return float(
+                        requested_depth
+                        * np.sum(
+                            physics_core.integrator.vertex_weights_m2[mask],
+                            dtype=np.float64,
+                        )
+                    )
+
+                combined_mask = left_mask | right_mask
+                audit_geometry = {
+                    "affected_cell_count": int(
+                        np.count_nonzero(combined_mask)
+                    ),
+                    "footprint_area_m2": float(
+                        np.sum(
+                            physics_core.integrator.vertex_weights_m2[
+                                combined_mask
+                            ],
+                            dtype=np.float64,
+                        )
+                    ),
+                    "requested_r2m_m3": (
+                        requested_track_volume(
+                            left_mask, left_track_velocity_xy
+                        )
+                        + requested_track_volume(
+                            right_mask, right_track_velocity_xy
+                        )
+                    ),
+                }
             track_result = physics_core.apply_track_soil(
                 left_footprint_mask=left_mask,
                 right_footprint_mask=right_mask,
-                left_track_velocity_xy_m_s=base_velocity_xy + drive_result.applied_left_command * CONFIG.nominal_track_belt_speed_m_s * forward_xy,
-                right_track_velocity_xy_m_s=base_velocity_xy + drive_result.applied_right_command * CONFIG.nominal_track_belt_speed_m_s * forward_xy,
+                left_track_velocity_xy_m_s=left_track_velocity_xy,
+                right_track_velocity_xy_m_s=right_track_velocity_xy,
                 base_velocity_xy_m_s=base_velocity_xy,
                 dt_s=CONFIG.physics_dt_s,
             )
@@ -1444,7 +1752,7 @@ def main() -> None:
                     "resting_to_mobile_volume_m3": track_result.resting_to_mobile_volume_m3,
                     **latest_track_status,
                 })
-        return drive_result, track_result
+        return drive_result, track_result, audit_geometry
 
     def synchronize_terrain_contact(*, force: bool = False) -> None:
         nonlocal last_contact_surface, last_contact_update_sim_s, contact_status
@@ -1566,6 +1874,69 @@ def main() -> None:
                 "visual_source": "AUTHORITATIVE_H_FREE_GPU_DIRTY_TILES",
             }
         )
+
+    def capture_tool_mobile_validity_view(
+        *, label: str, view: str, tool_state, tau_s: float
+    ) -> None:
+        """Capture a paused render frame; physics state and time stay fixed."""
+
+        if (
+            HEADLESS
+            or not ARGS.tool_mobile_validity_visual_diagnostic
+            or tool_mobile_validity_frame_dir is None
+            or tool_mobile_validity_audit is None
+        ):
+            return
+        from omni.kit.async_engine import run_coroutine
+        from omni.kit.viewport.utility import capture_viewport_to_file, get_active_viewport
+        import omni.kit.renderer_capture
+        from isaacsim.core.utils.viewports import set_camera_view
+
+        viewport = get_active_viewport()
+        if viewport is None:
+            raise RuntimeError("TOOL_MOBILE_VALIDITY_ACTIVE_VIEWPORT_UNAVAILABLE")
+        viewport.resolution = (CONFIG.viewport_width, CONFIG.viewport_height)
+        destination = tool_mobile_validity_frame_dir / f"{label}_{view}.png"
+        was_playing = bool(world.is_playing())
+        if was_playing:
+            world.pause()
+        synchronize_visual(force=True)
+        if view == "side":
+            _set_presentation_camera(2)
+        elif view == "top":
+            center_t = np.mean(np.asarray(tool_state.cutting_edge_terrain), axis=0)
+            center_w = grid.terrain_to_world(center_t)
+            eye = np.asarray(center_w, dtype=np.float64) + np.asarray([0.01, -0.01, 10.0])
+            set_camera_view(eye=eye, target=np.asarray(center_w, dtype=np.float64))
+        else:
+            raise ValueError(f"unknown tool-Mobile diagnostic view: {view}")
+        for _ in range(8):
+            simulation_app.update()
+        capture = capture_viewport_to_file(
+            viewport, file_path=str(destination), is_hdr=False
+        )
+        pending = run_coroutine(capture.wait_for_result(completion_frames=20))
+        for _ in range(60):
+            if pending.done():
+                break
+            simulation_app.update()
+        if not pending.done() or not bool(pending.result()):
+            raise RuntimeError(f"TOOL_MOBILE_VALIDITY_CAPTURE_TIMEOUT:{label}:{view}")
+        omni.kit.renderer_capture.acquire_renderer_capture_interface().wait_async_capture()
+        if not destination.is_file() or destination.stat().st_size == 0:
+            raise RuntimeError(f"TOOL_MOBILE_VALIDITY_EMPTY_SCREENSHOT:{label}:{view}")
+        tool_mobile_validity_audit.visual_frames.append({
+            "label": label,
+            "view": view,
+            "path": str(destination),
+            "size_bytes": destination.stat().st_size,
+            "simulation_time_s": float(world.current_time),
+            "tau_from_first_mobile_s": float(tau_s),
+            "visual_source": "AUTHORITATIVE_H_FREE_PLUS_READ_ONLY_DEVICE_OVERLAY",
+            "arrow_scale": "velocity endpoint = origin + 0.35 * q/h (visual only)",
+        })
+        if was_playing:
+            world.play()
 
     def write_final_presentation_summary(status: str) -> dict[str, object]:
         reservoirs = physics_core.reservoir_observation()
@@ -1860,6 +2231,11 @@ def main() -> None:
     control.initialized()
     if ARGS.acceptance_cycles > 0:
         control.run_cycles(ARGS.acceptance_cycles)
+    elif (
+        ARGS.mobile_first_write_audit is not None
+        or ARGS.tool_mobile_validity_audit is not None
+    ):
+        control.run_cycles(1)
     elif ARGS.presentation_smoke_autostart and HEADLESS:
         control.run_cycles(1)
     manifest = {
@@ -1929,7 +2305,11 @@ def main() -> None:
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"status": "READY", "run_dir": str(run_dir), "autoplay": False}), flush=True)
-    if FINAL_PRESENTATION:
+    if ARGS.presentation_fixed_camera is not None:
+        _set_presentation_camera(
+            1 if ARGS.presentation_fixed_camera == "oblique" else 4
+        )
+    elif FINAL_PRESENTATION:
         _set_presentation_camera(1)
         # The blocker run needs only the post-breakout evidence frame.  Some
         # window managers interpret an early capture before the first PhysX
@@ -1987,6 +2367,8 @@ def main() -> None:
             and ARGS.startup_smoke_frames == 0
             and ARGS.acceptance_cycles == 0
             and not ARGS.presentation_smoke_autostart
+            and ARGS.mobile_first_write_audit is None
+            and ARGS.tool_mobile_validity_audit is None
         ):
             # Headless mode cannot receive GUI input; remain deterministic and
             # avoid an accidental autonomous cycle.
@@ -2126,6 +2508,8 @@ def main() -> None:
             if not world.is_playing():
                 world.play()
             frame_wall_start = perf_counter()
+            acceptance_ledger_wall_ms = 0.0
+            cut_fill_audit_wall_ms = 0.0
             current_tool = kinematics.update(robot.get_tool_link_pose_world(), float(world.current_time))
             if FINAL_PRESENTATION:
                 if not cycle_started:
@@ -2234,8 +2618,15 @@ def main() -> None:
                 if decision.state is ExcavatorCycleState.CUT_AND_FILL:
                     cutting_distance_m = 0.0
                     previous_cutting_center = np.mean(current_tool.cutting_edge_terrain, axis=0)
+                    if realistic_cut_trajectory is not None:
+                        realistic_cut_trajectory.reset(
+                            np.asarray(
+                                articulation.get_joint_positions(), dtype=np.float64
+                            ).reshape(-1)
+                        )
                     if (
-                        cut_fill_payload_audit is not None
+                        ARGS.cut_fill_payload_audit is not None
+                        and cut_fill_payload_audit is not None
                         and not cut_fill_start_checkpoint_written
                     ):
                         audit_target = ARGS.cut_fill_payload_audit.expanduser().resolve()
@@ -2322,15 +2713,57 @@ def main() -> None:
                 panel.update("cycle completed by physical completion conditions")
                 continue
 
-            actuator_output = apply_bounded_arm_target(
-                decision.command.joint_target_rad
+            commanded_joint_target_rad = decision.command.joint_target_rad
+            if (
+                realistic_cut_trajectory is not None
+                and decision.state
+                in {
+                    ExcavatorCycleState.CUT_AND_FILL,
+                    ExcavatorCycleState.CURL_AND_BREAKOUT,
+                }
+            ):
+                realistic_cut_sample = realistic_cut_trajectory.sample(
+                    CONFIG.physics_dt_s
+                )
+                commanded_joint_target_rad = realistic_cut_sample.target_rad
+            actuator_output = apply_bounded_arm_target(commanded_joint_target_rad)
+            production_physics_step_count += 1
+            audit_this_step = bool(
+                tracksoil_conservation_audit is not None
+                and decision.state
+                in {
+                    ExcavatorCycleState.LIFT_TO_TRANSPORT_HEIGHT,
+                    ExcavatorCycleState.REVERSE_TRAVEL,
+                    ExcavatorCycleState.ALIGN_DUMP,
+                }
             )
+            if audit_this_step:
+                tracksoil_conservation_audit.begin_step(
+                    simulation_time_s=float(world.current_time),
+                    phase=decision.state.value,
+                    physics_step=production_physics_step_count,
+                    snapshot=physics_core.scalar_state(),
+                )
             track_wall_start = perf_counter()
-            apply_track_soil_for_command(
+            _, track_result_for_audit, track_geometry_for_audit = apply_track_soil_for_command(
                 decision.command.left_track_effort_fraction,
                 decision.command.right_track_effort_fraction,
                 braking=decision.command.hold_brake,
             )
+            if audit_this_step:
+                tracksoil_conservation_audit.after_tracksoil(
+                    snapshot=physics_core.scalar_state(),
+                    result=track_result_for_audit,
+                    affected_cell_count=track_geometry_for_audit[
+                        "affected_cell_count"
+                    ],
+                    footprint_area_m2=track_geometry_for_audit[
+                        "footprint_area_m2"
+                    ],
+                    requested_r2m_m3=track_geometry_for_audit[
+                        "requested_r2m_m3"
+                    ],
+                )
             track_wall_ms = (perf_counter() - track_wall_start) * 1_000.0
             phase_by_state = {
                 ExcavatorCycleState.PENETRATE: "penetrate",
@@ -2389,6 +2822,28 @@ def main() -> None:
                 if CONFIG.runtime_backend == "HOST_REFERENCE"
                 else None
             )
+            if mobile_first_write_audit is not None:
+                mobile_first_write_audit.begin_step(
+                    simulation_time_s=float(world.current_time),
+                    phase=decision.state.value,
+                    physics_step=production_physics_step_count,
+                    tool_state=current_tool,
+                )
+            if tool_mobile_validity_audit is not None:
+                tool_mobile_validity_audit.begin_step(
+                    simulation_time_s=float(world.current_time),
+                    phase=decision.state.value,
+                    physics_step=production_physics_step_count,
+                    tool_state=current_tool,
+                    payload_before_m3=payload_before_core_m3,
+                    joint_position_rad=np.asarray(
+                        articulation.get_joint_positions(), dtype=np.float64
+                    ).reshape(-1),
+                    joint_velocity_rad_s=np.asarray(
+                        articulation.get_joint_velocities(), dtype=np.float64
+                    ).reshape(-1),
+                    requested_joint_target_rad=commanded_joint_target_rad,
+                )
             core_result = physics_core.step(
                 current_tool,
                 phase=phase,
@@ -2397,6 +2852,22 @@ def main() -> None:
                 soil_force_mode=snapshot.soil_force_mode,
                 phase_ending=deposition_just_completed,
             )
+            if mobile_first_write_audit is not None:
+                mobile_first_write_audit.set_failure_metadata(
+                    None
+                    if core_result.interaction is None
+                    else core_result.interaction.failure_bridge
+                )
+                mobile_first_write_audit.finish_step(core_result=core_result)
+            if audit_this_step:
+                audit_wall_start = perf_counter()
+                tracksoil_conservation_audit.finish_step(
+                    snapshot=physics_core.scalar_state(),
+                    core_result=core_result,
+                )
+                acceptance_ledger_wall_ms = (
+                    perf_counter() - audit_wall_start
+                ) * 1_000.0
             last_core_result = core_result
             if (
                 V3_CLOSURE_AUDIT
@@ -2552,9 +3023,14 @@ def main() -> None:
                 )
                 if (
                     cut_fill_payload_audit is not None
-                    and decision.state is ExcavatorCycleState.CUT_AND_FILL
+                    and decision.state
+                    in {
+                        ExcavatorCycleState.CUT_AND_FILL,
+                        ExcavatorCycleState.CURL_AND_BREAKOUT,
+                    }
                     and core_result.avalanche_transition is not None
                 ):
+                    audit_wall_start = perf_counter()
                     cut_fill_payload_audit.observe(
                         simulation_time_s=float(world.current_time),
                         tool_state=current_tool,
@@ -2588,7 +3064,69 @@ def main() -> None:
                             if core_result.force_result is None
                             else core_result.force_result.application_point_terrain_m
                         ),
+                        requested_joint_target_rad=commanded_joint_target_rad,
+                        phase=decision.state.value,
+                        trajectory_stage=(
+                            "LEGACY_FIXED_TARGET"
+                            if realistic_cut_sample is None
+                            else realistic_cut_sample.stage
+                        ),
+                        mass_balance_error_m3=core_result.mass_balance_error_m3,
                     )
+                    cut_fill_audit_wall_ms = (
+                        perf_counter() - audit_wall_start
+                    ) * 1_000.0
+            if tool_mobile_validity_audit is not None:
+                assert physics_core.device_state is not None
+                validity_reservoir = physics_core.reservoir_observation()
+                validity_reservoir.update(
+                    physics_core.device_state.reservoir_reduction(
+                        material.assumed_bulk_density_kg_m3
+                    )
+                )
+                latest_cut_record = None
+                if (
+                    cut_fill_payload_audit is not None
+                    and cut_fill_payload_audit.records
+                    and np.isclose(
+                        float(cut_fill_payload_audit.records[-1]["simulation_time_s"]),
+                        float(world.current_time),
+                        rtol=0.0,
+                        atol=1.0e-9,
+                    )
+                ):
+                    latest_cut_record = cut_fill_payload_audit.records[-1]
+                tool_mobile_validity_audit.finish_step(
+                    core_result=core_result,
+                    payload_after_m3=float(physics_core.payload.volume_m3),
+                    reservoir=validity_reservoir,
+                    cut_record=latest_cut_record,
+                    base_pose_xy_yaw=base_pose_and_forward()[0],
+                )
+                if (
+                    ARGS.tool_mobile_validity_visual_diagnostic
+                    and tool_mobile_validity_audit.creation_time_s is not None
+                ):
+                    visual_tau_s = (
+                        float(world.current_time)
+                        - tool_mobile_validity_audit.creation_time_s
+                    )
+                    for offset_s in tool_mobile_visual_offsets_s:
+                        if (
+                            offset_s in tool_mobile_visual_captured_offsets
+                            or visual_tau_s + 1.0e-9 < offset_s
+                        ):
+                            continue
+                        offset_steps = int(round(offset_s * 60.0))
+                        frame_label = f"first_mobile_plus_{offset_steps:02d}dt"
+                        for view_name in ("side", "top"):
+                            capture_tool_mobile_validity_view(
+                                label=frame_label,
+                                view=view_name,
+                                tool_state=current_tool,
+                                tau_s=visual_tau_s,
+                            )
+                        tool_mobile_visual_captured_offsets.add(offset_s)
             if core_result.dump_release is not None:
                 material_funnel["dump_released_volume_m3"] += float(
                     core_result.dump_release.released_volume_m3
@@ -2691,9 +3229,17 @@ def main() -> None:
             if core_result.force_result is not None and np.linalg.norm(core_result.applied_force_terrain_n) > 0.0:
                 transform_world = grid.terrain_to_world_matrix
                 point_h = transform_world @ np.r_[core_result.force_result.application_point_terrain_m, 1.0]
+                residual_couple = (
+                    core_result.force_result.residual_couple_terrain_nm
+                    if np.allclose(
+                        core_result.applied_force_terrain_n,
+                        core_result.computed_force_terrain_n,
+                    )
+                    else np.zeros(3, dtype=np.float64)
+                )
                 bucket_force_body.apply_forces_and_torques_at_pos(
                     forces=(transform_world[:3, :3] @ core_result.applied_force_terrain_n).astype(np.float32).reshape(1, 3),
-                    torques=np.zeros((1, 3), dtype=np.float32),
+                    torques=(transform_world[:3, :3] @ residual_couple).astype(np.float32).reshape(1, 3),
                     positions=(point_h[:3] / point_h[3]).astype(np.float32).reshape(1, 3),
                     is_global=True,
                 )
@@ -2882,6 +3428,8 @@ def main() -> None:
                         "physx_render_step": physx_wall_ms,
                         "visual_update": visual_wall_ms,
                         "contact_update": contact_wall_ms,
+                        "p0_2b_acceptance_ledger": acceptance_ledger_wall_ms,
+                        "p0_2d_cut_fill_audit": cut_fill_audit_wall_ms,
                         "total_frame": (perf_counter() - frame_wall_start) * 1_000.0,
                     },
                     "core_timings_ms": core_result.timings_ms,
@@ -3185,6 +3733,18 @@ def main() -> None:
             ARGS.dump_plus_9_checkpoint is None or dump_plus_9_checkpoint_written
         ):
             break
+        if (
+            mobile_first_write_audit is not None
+            and mobile_first_write_audit.complete
+        ):
+            mobile_first_write_audit.write()
+            break
+        if (
+            tool_mobile_validity_audit is not None
+            and tool_mobile_validity_audit.complete
+        ):
+            tool_mobile_validity_audit.write()
+            break
 
     _LIFECYCLE_RECORD["simulation_app_is_running_became_false"] = bool(
         not simulation_app.is_running()
@@ -3198,6 +3758,11 @@ def main() -> None:
         or ARGS.final_presentation_blocker_check
         or dump_checkpoint_written
         or dump_plus_9_checkpoint_written
+        or (mobile_first_write_audit is not None and mobile_first_write_audit.complete)
+        or (
+            tool_mobile_validity_audit is not None
+            and tool_mobile_validity_audit.complete
+        )
     )
     if _SIGNAL_EXIT_REQUESTED:
         _LIFECYCLE_RECORD["exit_reason"] = ExitReason.EXTERNAL_SIGNAL.value
@@ -3236,13 +3801,19 @@ def main() -> None:
                 None if final_snapshot.failure is None else final_snapshot.failure.code
             )
         )
-        audit_target = ARGS.cut_fill_payload_audit.expanduser().resolve()
-        audit_target.parent.mkdir(parents=True, exist_ok=True)
-        audit_target.write_text(
-            json.dumps(audit_report, indent=2) + "\n", encoding="utf-8"
-        )
+        if ARGS.cut_fill_payload_audit is not None:
+            audit_target = ARGS.cut_fill_payload_audit.expanduser().resolve()
+            audit_target.parent.mkdir(parents=True, exist_ok=True)
+            audit_target.write_text(
+                json.dumps(audit_report, indent=2) + "\n", encoding="utf-8"
+            )
         (run_dir / "cut_fill_payload_causal_audit.json").write_text(
             json.dumps(audit_report, indent=2) + "\n", encoding="utf-8"
+        )
+    if tool_mobile_validity_audit is not None:
+        validity_report = tool_mobile_validity_audit.write()
+        (run_dir / "tool_mobile_physical_validity_run.json").write_text(
+            json.dumps(validity_report, indent=2) + "\n", encoding="utf-8"
         )
     if (
         (ARGS.presentation_smoke_autostart or GUI_LIFECYCLE_SMOKE)
@@ -3250,6 +3821,69 @@ def main() -> None:
         and not presentation_smoke_reset_verified
     ):
         raise RuntimeError("PRESENTATION_RESET_SMOKE_FAILED")
+    if tracksoil_conservation_audit is not None:
+        audit_result = tracksoil_conservation_audit.report()
+        audit_result["run_dir"] = str(run_dir)
+        audit_result["runtime_backend"] = CONFIG.runtime_backend
+        audit_result["state_authority"] = "DEVICE"
+        audit_result["grid_shape_yx"] = list(CONFIG.grid_shape)
+        audit_result["grid_resolution_m"] = CONFIG.grid_spacing_m
+        audit_result["physics_parameters_changed"] = []
+        audit_result["mobile_v2_changed"] = bool(
+            ARGS.mobile_v2_dual_cv_audit is not None
+        )
+        audit_result["failuresurface_v3_changed"] = False
+        audit_result["curl_scoop_trajectory_changed"] = False
+        per_run_audit = run_dir / "tracksoil_conservation_causal_report.json"
+        per_run_audit.write_text(
+            json.dumps(audit_result, indent=2) + "\n", encoding="utf-8"
+        )
+        if ARGS.mobile_v2_dual_cv_audit is not None:
+            dual_cv_target = ARGS.mobile_v2_dual_cv_audit.expanduser().resolve()
+            dual_cv_target.parent.mkdir(parents=True, exist_ok=True)
+            dual_cv_target.write_text(
+                json.dumps(audit_result, indent=2) + "\n", encoding="utf-8"
+            )
+            # P0-2A canonical artifacts are frozen causal evidence.  The
+            # remainder of this legacy export block is intentionally skipped
+            # for P0-2B so a validation replay cannot overwrite them.
+        else:
+            canonical_audit_dir = ROOT / "outputs/mobile_v2_production"
+            canonical_audit_dir.mkdir(parents=True, exist_ok=True)
+            (canonical_audit_dir / "tracksoil_conservation_timeseries.json").write_text(
+                json.dumps(
+                    {
+                        "schema": audit_result["schema"],
+                        "run_dir": str(run_dir),
+                        "records": audit_result["records"],
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (canonical_audit_dir / "tracksoil_first_bad_step.json").write_text(
+                json.dumps(
+                    {
+                        key: audit_result.get(key)
+                        for key in (
+                            "schema",
+                            "run_dir",
+                            "location_threshold_m3",
+                            "cut_curl_numerical_floor_m3",
+                            "first_bad_step_found",
+                            "last_good_boundary",
+                            "first_bad_boundary",
+                        )
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (canonical_audit_dir / "tracksoil_conservation_causal_report.json").write_text(
+                json.dumps(audit_result, indent=2) + "\n", encoding="utf-8"
+            )
     control.close()
     (run_dir / "track_soil_events.json").write_text(
         json.dumps(track_soil_log, indent=2) + "\n", encoding="utf-8"
