@@ -327,8 +327,17 @@ class ToolMobileContactSupport:
             object.__setattr__(self, name, _ro(array))
         if count:
             xy_norms = np.linalg.norm(self.outward_normals_xy, axis=1)
-            if not np.allclose(xy_norms, 1.0, atol=1.0e-10):
-                raise ValueError("[ToolMobileContact] projected normals must be unit")
+            # A true 3-D contact may have no representable horizontal normal
+            # (e.g. bucket floor). Legacy XY diagnostics are therefore either
+            # unit vectors or exactly zero; production contact consumes the
+            # retained 3-D normal instead.
+            valid_xy = np.isclose(xy_norms, 1.0, atol=1.0e-10) | np.isclose(
+                xy_norms, 0.0, atol=1.0e-10
+            )
+            if not np.all(valid_xy):
+                raise ValueError(
+                    "[ToolMobileContact] projected normals must be unit or zero"
+                )
         volume = float(self.mobile_volume_m3)
         if not np.isfinite(volume) or volume < 0.0:
             raise ValueError("[ToolMobileContact] mobile volume must be finite/non-negative")
@@ -479,13 +488,17 @@ def build_tool_mobile_contact_support(
             # that cavity the tool-to-material normal is opposite the cavity
             # outward face normal; outside it follows the face normal.
             normal = (-1.0 if inside else 1.0) * face_normals[face_index]
-        horizontal = normal[:2]
+        horizontal = normal[:2].copy()
         horizontal_norm = float(np.linalg.norm(horizontal))
         if horizontal_norm <= _EPS:
-            # Mobile V2 has no vertical momentum state.  A horizontal plate
-            # contact cannot be represented without a different 3-D model.
-            continue
-        horizontal /= horizontal_norm
+            # V1.3 contact detection is a true 3-D oracle even though the
+            # authoritative Mobile state stores only q_x/q_y. Retain a
+            # vertical-only CAD contact for closing/dimensionality diagnostics;
+            # its legacy XY projection is exactly zero and therefore contributes
+            # no representable 2-D wall impulse.
+            horizontal[:] = 0.0
+        else:
+            horizontal /= horizontal_norm
         surface_velocity = (
             np.asarray(tool_state.linear_velocity, dtype=np.float64)
             + np.cross(

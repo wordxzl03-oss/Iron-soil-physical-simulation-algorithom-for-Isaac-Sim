@@ -148,6 +148,15 @@ class WarpExactToolMobileGeometryTests(unittest.TestCase):
         # Geometry equivalence must propagate through the unchanged normal and
         # tangential impulse law, not stop at accept/reject classification.
         for position, index in enumerate(cpu.flat_indices):
+            # The legacy 2-D wall law is only defined when a horizontal normal
+            # exists. V1.3 deliberately retains vertical-only contacts in the
+            # 3-D geometry oracle so their unresolved impulse is measurable.
+            if np.linalg.norm(cpu.outward_normals_xy[position]) <= 1.0e-12:
+                np.testing.assert_allclose(
+                    downloaded["outward_normals_xy"][position],
+                    np.zeros(2), atol=2.0e-12, rtol=0.0,
+                )
+                continue
             mass = (
                 1370.0 * self.integrator.vertex_weights_m2.ravel()[index]
                 * mobile.ravel()[index]

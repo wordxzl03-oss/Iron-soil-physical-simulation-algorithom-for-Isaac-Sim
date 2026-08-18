@@ -297,12 +297,28 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
             # an artificial horizontal bulldozing impulse.
             row = i // cols
             col = i - row * cols
-            left = i if col == 0 else i - 1
-            right = i if col + 1 == cols else i + 1
-            down = i if row == 0 else i - cols
-            up = i if row + 1 == rows else i + cols
-            denom_x = dx if (col == 0 or col + 1 == cols) else wp.float64(2.0) * dx
-            denom_y = dy if (row == 0 or row + 1 == rows) else wp.float64(2.0) * dy
+            # Warp 1.5.0 codegen does not support Python conditional
+            # expressions (ast.IfExp) inside kernels. Keep the same
+            # one-sided/central finite-difference stencil with explicit
+            # branch assignments.
+            left = i - 1
+            if col == 0:
+                left = i
+            right = i + 1
+            if col + 1 == cols:
+                right = i
+            down = i - cols
+            if row == 0:
+                down = i
+            up = i + cols
+            if row + 1 == rows:
+                up = i
+            denom_x = wp.float64(2.0) * dx
+            if col == 0 or col + 1 == cols:
+                denom_x = dx
+            denom_y = wp.float64(2.0) * dy
+            if row == 0 or row + 1 == rows:
+                denom_y = dy
             gx = (b_eff[right] - b_eff[left]) / denom_x
             gy = (b_eff[up] - b_eff[down]) / denom_y
             terrain_normal = wp.normalize(wp.vec3d(-gx, -gy, wp.float64(1.0)))

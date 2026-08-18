@@ -65,10 +65,17 @@ def test_shared_mobile_track_and_frontier_bind_no_shadow_terrain():
     mobile_solver.bind_device_state(state, material, grid, integrator)
     track_solver = WarpTrackSoilOperator(grid.shape, runtime=state.runtime)
     track_solver.bind_device_state(state)
-    frontier = WarpCompactActiveEdgeOperator(grid.shape, runtime=state.runtime)
+    frontier = WarpCompactActiveEdgeOperator(
+        grid.shape, runtime=state.runtime, tile_size=state.tile_size
+    )
     frontier.bind_device_state(state)
-    assert state.runtime.arrays["height"] is state.runtime.arrays["mobile"]
-    assert frontier.diagnostics()["resident_state"] == ["resting", "frontier_reached"]
+    # Shared-state Mobile must use the canonical ``mobile`` allocation directly.
+    # A historical ``height`` compatibility alias is intentionally forbidden: after
+    # checkpoint restore it could retain the pre-restore Warp allocation and create
+    # split authority between Airborne/FailureZone and Mobile.
+    assert "height" not in state.runtime.arrays
+    assert "mobile" in state.runtime.arrays
+    assert frontier.diagnostics()["resident_state"] == ["b_eff", "weights", "frontier_reached"]
     before = state.reservoir_reduction(material.assumed_bulk_density_kg_m3)
     mobile_solver.step_resident(1.0 / 120.0)
     after = state.reservoir_reduction(material.assumed_bulk_density_kg_m3)
