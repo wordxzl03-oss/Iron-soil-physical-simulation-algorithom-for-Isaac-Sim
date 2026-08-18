@@ -140,10 +140,15 @@ class DeviceFailureZoneBridge:
         activated = np.minimum(failure.active_thickness_m, available_static)
         mode = "FEE_FAILURE_ZONE"
         if failure.applicability_status in {"OUTSIDE_FEE_DOMAIN", "PARTIAL_OUTSIDE_FEE_DOMAIN"}:
+            # Conservative geometry can still be committed so terrain cannot
+            # geometrically interpenetrate the bucket, but the corresponding
+            # independent penetration resistance F_pen is not yet calibrated
+            # or implemented.  Keep that force-ownership gap explicit in the
+            # activation mode; never relabel this path as validated FEE force.
             activated = np.maximum(
                 activated, np.minimum(intersection.penetration_depth_m, available_static)
             )
-            mode = "GEOMETRIC_SWEEP_ONLY_OUTSIDE_FEE_FORCE_DOMAIN"
+            mode = "GEOMETRIC_SWEEP_OUTSIDE_FEE_REQUIRES_UNRESOLVED_F_PEN"
         elif not np.any(activated > 0.0):
             mode = "NONE"
         if self.audit_state_observer is not None:

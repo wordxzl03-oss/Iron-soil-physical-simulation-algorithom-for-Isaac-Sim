@@ -571,6 +571,7 @@ class DeviceBulkState:
             "avalanche_previous_component",
             "avalanche_activation_count",
             "deposition_mask",
+            "deposition_exclusion_mask",
         ):
             self.runtime.zeros(name, self.size, dtype=wp.int32)
         for name in (
@@ -1248,6 +1249,7 @@ class DeviceBulkState:
             "avalanche_activation_count", "avalanche_latch",
             "avalanche_previous_component", "frontier_reached",
             "active_mask", "material_mask", "deposition_mask",
+            "deposition_exclusion_mask",
         }
         unknown = sorted(set(fields) - float_fields - int_fields)
         if unknown:
@@ -1267,6 +1269,10 @@ class DeviceBulkState:
             self._upload_full(name, array, dtype=dtype, initialization=True)
         self.runtime.arrays["resting"] = self.runtime.arrays["b_eff"]
         self.runtime.arrays["initial_resting"] = self.runtime.arrays["initial_b_eff"]
+        # Per-step tool occupancy is transient scratch, not checkpoint physics.
+        # Older checkpoints may contain it; accept for compatibility but never
+        # resurrect stale deposition exclusion into the next frame.
+        self.runtime.arrays["deposition_exclusion_mask"].zero_()
         time_value = float(timestamp_s)
         if not np.isfinite(time_value) or time_value < 0.0:
             raise BulkStateAuthorityError(
@@ -1340,9 +1346,11 @@ class DeviceBulkState:
             "avalanche_owned_surface",
             "avalanche_owned_export_baseline",
             "mobile_export_cumulative",
+            "mobile_flux_export_cumulative",
             "avalanche_r2m_cumulative", "avalanche_m2r_cumulative",
             "avalanche_persistence_int", "avalanche_persistence_float",
-            "avalanche_activity_tile_flags", "deposition_work", "track_rut",
+            "avalanche_activity_tile_flags", "deposition_work",
+            "deposition_exclusion_mask", "track_rut",
             "surface_before", "dirty_tile_flags",
         }
         missing = sorted(required - set(self.runtime.arrays))
@@ -1369,6 +1377,7 @@ class DeviceBulkState:
             "avalanche_first_activation_time", "avalanche_last_activation_time",
             "avalanche_owned_surface", "avalanche_owned_export_baseline",
             "mobile_export_cumulative",
+            "mobile_flux_export_cumulative",
             "avalanche_r2m_cumulative", "avalanche_m2r_cumulative",
             "avalanche_changed", "avalanche_diag_int", "avalanche_diag_float",
             "avalanche_persistence_int", "avalanche_persistence_float",
@@ -1377,7 +1386,8 @@ class DeviceBulkState:
             "avalanche_unstable", "avalanche_parent",
             "avalanche_component_count", "avalanche_latch",
             "avalanche_previous_component", "avalanche_activation_count",
-            "deposition_mask", "surface_before", "dirty_tile_flags",
+            "deposition_mask", "deposition_exclusion_mask",
+            "surface_before", "dirty_tile_flags",
             "avalanche_activity_tile_flags",
         ):
             self.runtime.arrays[name].zero_()

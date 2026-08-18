@@ -65,14 +65,12 @@ def _config(**changes: object) -> LargeAvalancheTransitionConfig:
         "minimum_mobilizable_volume_m3": 0.001,
         "persistence_time_s": 0.10,
         "mobilization_depth_m": 0.05,
-        "gravity_velocity_length_m": 0.20,
-        "velocity_efficiency": 0.5,
     }
     values.update(changes)
     return LargeAvalancheTransitionConfig.from_mapping(values)
 
 
-def test_transition_is_driven_by_connected_physics_and_elapsed_time() -> None:
+def test_local_yield_is_immediate_while_persistence_only_classifies_large_event() -> None:
     grid, integrator = _grid()
     resting = _steep_plane(grid)
     mobile, momentum = _fields(grid)
@@ -81,26 +79,38 @@ def test_transition_is_driven_by_connected_physics_and_elapsed_time() -> None:
     first = controller.observe_and_maybe_mobilize(
         resting, mobile, momentum, _material(), grid, integrator, 0.04
     )
-    assert not first.transitioned
+    assert first.transitioned
     assert first.diagnostics.connected_extent_pass
     assert first.diagnostics.unstable_volume_pass
     assert first.diagnostics.mean_excess_start_deg > 0.0
     assert first.diagnostics.persistence_s == 0.04
     assert not first.diagnostics.persistence_pass
+    assert (
+        first.diagnostics.classification
+        == controller.PERSISTING_LARGE_UNSTABLE_REGION
+    )
 
     second = controller.observe_and_maybe_mobilize(
-        resting, mobile, momentum, _material(), grid, integrator, 0.04
+        first.H_resting_m,
+        first.mobile_height_m,
+        first.mobile_momentum_m2_s,
+        _material(), grid, integrator, 0.04
     )
     assert not second.transitioned
     third = controller.observe_and_maybe_mobilize(
-        resting, mobile, momentum, _material(), grid, integrator, 0.02
+        second.H_resting_m,
+        second.mobile_height_m,
+        second.mobile_momentum_m2_s,
+        _material(), grid, integrator, 0.02
     )
-    assert third.transitioned
+    # The currently owned tranche remains latched without real departure, but
+    # persistence can still classify the sustained connected failure as large.
+    assert not third.transitioned
     assert third.diagnostics.classification == controller.LARGE_AVALANCHE_MOBILE_PATH
     assert third.diagnostics.persistence_s == 0.10
 
 
-def test_transfer_conserves_volume_and_accounts_for_gravity_initiation_momentum() -> None:
+def test_transfer_conserves_volume_and_starts_with_zero_horizontal_momentum() -> None:
     grid, integrator = _grid()
     resting = _steep_plane(grid)
     mobile, momentum = _fields(grid)
@@ -128,9 +138,11 @@ def test_transfer_conserves_volume_and_accounts_for_gravity_initiation_momentum(
         result.gravity_initiation_impulse_kg_m_s,
         atol=1e-11,
     )
-    # The plane descends toward +X, so the gravity-driven launch is downhill.
-    assert result.gravity_initiation_impulse_kg_m_s[0] > 0.0
-    assert abs(result.gravity_initiation_impulse_kg_m_s[1]) < 1e-12
+    # R->M is a mass-only state transition. Gravity/pressure acceleration is
+    # applied subsequently by Mobile V2 over finite physical time.
+    np.testing.assert_allclose(
+        result.gravity_initiation_impulse_kg_m_s, np.zeros(2), atol=1e-12
+    )
 
 
 def test_latched_region_is_not_recounted_as_new_mobilizable_volume() -> None:
@@ -156,8 +168,10 @@ def test_latched_region_is_not_recounted_as_new_mobilizable_volume() -> None:
     )
     assert after.unstable_cell_count > 0
     assert after.largest_connected_mobilizable_volume_m3 == 0.0
-    assert not after.unstable_volume_pass
-    assert after.classification == controller.LOCAL_STATIC_INSTABILITY
+    # Event-scale volume is evaluated independent of ownership, so the event
+    # classification does not disappear just because this tranche is latched.
+    assert after.unstable_volume_pass
+    assert not after.transition_ready
 
 
 def test_latch_release_waits_for_complete_residual_static_event() -> None:
@@ -304,7 +318,59 @@ def test_local_redeposition_does_not_retrigger_the_same_owned_tranche() -> None:
     assert np.any(controller._mobilized_latch_mask)
 
 
-def test_disconnected_local_failures_do_not_activate_large_path() -> None:
+def test_gross_export_without_net_surface_departure_keeps_owned_tranche_latched() -> None:
+    """Face traffic alone is not proof that the owned tranche left the cell."""
+
+    grid, integrator = _grid()
+    resting = _steep_plane(grid)
+    mobile, momentum = _fields(grid)
+    material = MaterialScenario(
+        name="cohesionless_reversible_export_contract",
+        assumed_bulk_density_kg_m3=2200.0,
+        internal_friction_angle_deg=34.0,
+        cohesion_proxy_pa=0.0,
+        tool_friction_coefficient=0.45,
+        start_angle_deg=38.0,
+        stop_angle_deg=30.0,
+        mobile_friction_coefficient=0.35,
+    )
+    controller = LargeAvalancheTransitionController(
+        _config(persistence_time_s=0.01)
+    )
+    first = controller.observe_and_maybe_mobilize(
+        resting, mobile, momentum, material, grid, integrator, 0.01
+    )
+    assert first.transitioned
+
+    activated = np.asarray(controller._mobilized_latch_mask, dtype=bool)
+    weights = integrator.vertex_weights_m2
+    fake_gross_export = np.zeros(grid.shape, dtype=np.float64)
+    fake_gross_export[activated] = (
+        2.0 * controller.config.dry_tolerance_m * weights[activated]
+    )
+
+    # Put all Mobile straight back into Resting, so H_free is exactly the
+    # activation-time owned surface.  Even with positive gross face-export
+    # bookkeeping, there is no net tranche departure and ownership must stay.
+    redeposited_resting = first.H_resting_m + first.mobile_height_m
+    replay = controller.observe_and_maybe_mobilize(
+        redeposited_resting,
+        np.zeros(grid.shape),
+        np.zeros(grid.shape + (2,)),
+        material,
+        grid,
+        integrator,
+        0.01,
+        release_settled_latches=True,
+        conservative_export_cumulative_m3=fake_gross_export,
+    )
+    assert replay.diagnostics.unstable_cell_count > 0
+    assert replay.diagnostics.largest_connected_mobilizable_volume_m3 == 0.0
+    assert not replay.transitioned
+    assert np.any(controller._mobilized_latch_mask)
+
+
+def test_disconnected_local_failures_use_local_yield_mobile_path() -> None:
     grid, integrator = _grid()
     resting = np.ones(grid.shape)
     # Four isolated spikes have steep local slopes but no qualifying connected
@@ -321,11 +387,15 @@ def test_disconnected_local_failures_do_not_activate_large_path() -> None:
     result = controller.observe_and_maybe_mobilize(
         resting, mobile, momentum, _material(), grid, integrator, 1.0
     )
-    assert not result.transitioned
+    assert result.transitioned
     assert result.diagnostics.unstable_cell_count > 0
     assert result.diagnostics.connected_region_count >= 4
     assert not result.diagnostics.connected_extent_pass
-    assert result.diagnostics.classification == controller.LOCAL_STATIC_INSTABILITY
+    assert (
+        result.diagnostics.classification
+        == controller.LOCAL_YIELD_MOBILE_PATH
+    )
+    assert result.transferred_volume_m3 > 0.0
 
 
 def test_current_mobile_activity_and_settled_recovery_contract() -> None:
@@ -349,8 +419,8 @@ def test_current_mobile_activity_and_settled_recovery_contract() -> None:
     assert not active.ready_for_final_minislope
     assert active.reason == "MOBILE_LAYER_ACTIVE"
 
-    # A small residual static defect is handed to final local MiniSlope only
-    # after Mobile Layer is empty; it is not classified as a large avalanche.
+    # A small constitutively yielded defect is still a physical Mobile event;
+    # MiniSlope is reserved for residual geometry after Y_start is empty.
     residual = flat.copy()
     residual[10, 10] += 0.10
     mobile.fill(0.0)
@@ -359,9 +429,9 @@ def test_current_mobile_activity_and_settled_recovery_contract() -> None:
         residual, mobile, momentum, _material(), grid, integrator
     )
     assert not recovery.settled
-    assert recovery.ready_for_final_minislope
-    assert recovery.residual_static_relaxation_required
-    assert recovery.reason == "LOCAL_RESIDUAL_READY_FOR_FINAL_MINISLOPE"
+    assert not recovery.ready_for_final_minislope
+    assert not recovery.residual_static_relaxation_required
+    assert recovery.reason == "LOCAL_YIELD_REQUIRES_MOBILE_PATH"
 
 
 def test_uncalibrated_provenance_mapping_and_sensitivity_are_explicit() -> None:
@@ -427,3 +497,55 @@ def test_transition_exposes_measured_host_hotspot_breakdown() -> None:
     }
     assert all(np.isfinite(value) and value >= 0.0 for value in profile.values())
     assert profile["total"] >= profile["gradient"]
+
+
+def test_real_export_releases_owned_tranche_even_while_mobile_is_fast() -> None:
+    """Departure evidence cannot be blocked by a low-speed latch condition."""
+
+    grid, integrator = _grid()
+    resting = _steep_plane(grid)
+    mobile, momentum = _fields(grid)
+    controller = LargeAvalancheTransitionController(
+        _config(persistence_time_s=0.5)
+    )
+    first = controller.observe_and_maybe_mobilize(
+        resting, mobile, momentum, _material(), grid, integrator, 0.01
+    )
+    assert first.transitioned
+    activated = np.asarray(controller._mobilized_latch_mask, dtype=bool)
+    assert np.any(activated)
+
+    # Simulate conservative transport removing most of the owned Mobile while
+    # the remainder is still moving well above the activity threshold.
+    transported_mobile = np.array(first.mobile_height_m, copy=True)
+    transported_mobile[activated] *= 0.25
+    fast_momentum = np.zeros(grid.shape + (2,), dtype=np.float64)
+    fast_momentum[..., 0] = transported_mobile * 1.0
+    export = np.zeros(grid.shape, dtype=np.float64)
+    export[activated] = (
+        10.0 * controller.config.dry_tolerance_m
+        * integrator.vertex_weights_m2[activated]
+    )
+
+    retrigger = controller.observe_and_maybe_mobilize(
+        first.H_resting_m,
+        transported_mobile,
+        fast_momentum,
+        _material(),
+        grid,
+        integrator,
+        0.01,
+        release_settled_latches=True,
+        conservative_export_cumulative_m3=export,
+    )
+    assert retrigger.transferred_volume_m3 > 0.0
+
+
+def test_removed_launch_velocity_parameters_are_rejected_as_stale_config() -> None:
+    for stale in ("gravity_velocity_length_m", "velocity_efficiency"):
+        try:
+            LargeAvalancheTransitionConfig.from_mapping({stale: 0.5})
+        except ValueError as exc:
+            assert "unknown configuration fields" in str(exc)
+        else:  # pragma: no cover - explicit contract
+            raise AssertionError(f"stale field {stale} was silently accepted")

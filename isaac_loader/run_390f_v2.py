@@ -290,7 +290,6 @@ if ARGS.avalanche_sensitivity != "nominal":
     transition["minimum_connected_area_m2"] *= 1.0 + factor
     transition["minimum_mobilizable_volume_m3"] *= 1.0 + factor
     transition["mobilization_depth_m"] *= 1.0 - factor
-    transition["velocity_efficiency"] *= 1.0 - factor
     transition["sensitivity_case"] = (
         f"{ARGS.avalanche_sensitivity}_uncalibrated"
     )
@@ -1040,20 +1039,21 @@ def main() -> None:
         drive.GetMaxForceAttr().Set(
             actuator_limit_by_name[str(joint_name)].effort_limit_nm
         )
+        # Isaac Sim effort control is mutually exclusive with position/velocity
+        # drive control.  Production arm actuation therefore uses zero PD gains
+        # and sends the force/power-limited torque computed below directly.
+        drive.GetStiffnessAttr().Set(0.0)
+        drive.GetDampingAttr().Set(0.0)
     arm_actuator = ExcavatorActuatorModel(
         actuator_config, tuple(str(name) for name in articulation.dof_names)
     )
     arm_actuator.reset(
         np.asarray(articulation.get_joint_velocities(), dtype=np.float64).reshape(-1)
     )
-    arm_drive_target_rad = np.asarray(
-        articulation.get_joint_positions(), dtype=np.float64
-    ).reshape(-1).copy()
 
     def apply_bounded_arm_target(desired_position_rad: np.ndarray):
-        """Advance a continuous, force-capped drive target; never teleport links."""
+        """Issue a force/power-limited effort servo command; never teleport links."""
 
-        nonlocal arm_drive_target_rad
         desired = np.asarray(desired_position_rad, dtype=np.float64).reshape(-1)
         measured_position = np.asarray(
             articulation.get_joint_positions(), dtype=np.float64
@@ -1067,15 +1067,9 @@ def main() -> None:
             measured_velocity,
             CONFIG.physics_dt_s,
         )
-        proposed = arm_drive_target_rad + output.target_velocity_rad_s * CONFIG.physics_dt_s
-        remaining_before = desired - arm_drive_target_rad
-        remaining_after = desired - proposed
-        reached = (remaining_before == 0.0) | (
-            np.sign(remaining_before) != np.sign(remaining_after)
+        controller.apply_action(
+            ArticulationAction(joint_efforts=np.asarray(output.effort_command_nm))
         )
-        proposed[reached] = desired[reached]
-        arm_drive_target_rad = proposed
-        controller.apply_action(ArticulationAction(joint_positions=arm_drive_target_rad))
         return output
     lower_matrix = np.asarray(UsdGeom.XformCache().GetLocalToWorldTransform(stage.GetPrimAtPath(CONFIG.lower_body)), dtype=np.float64).T
     axis_u, _, axis_vh = np.linalg.svd(lower_matrix[:3, :3])
@@ -1231,6 +1225,13 @@ def main() -> None:
                 CONFIG.navigation_drive_heading_gate_rad
             ),
             reverse_distance_m=2.0,
+            # Resolution-aware full-width engagement: the cutting edge must
+            # be materially engaged across most of its width before CUT can
+            # start.  This prevents one-corner penetration from satisfying the
+            # old maximum-depth-only gate.
+            minimum_mean_penetration_depth_m=0.10,
+            minimum_edge_engaged_fraction=0.70,
+            edge_engagement_depth_m=0.5 * min(grid.dx, grid.dy),
             minimum_payload_gain_m3=0.02,
             minimum_dump_release_m3=0.01,
             # The staged machine is already at the audited dig position.
@@ -1245,6 +1246,7 @@ def main() -> None:
     cycle_started = False
     cutting_distance_m = 0.0
     previous_cutting_center = None
+    cutting_direction_terrain_xy = None
     latest_intersection_volume_m3 = 0.0
     latest_penetration_depth_m = 0.0
     transition_log: list[dict[str, object]] = []
@@ -1281,7 +1283,13 @@ def main() -> None:
     realistic_cut_trajectory = (
         RealisticCurlScoopTrajectory(
             np.asarray(CONFIG.phase_targets_rad["penetrate"], dtype=np.float64),
+            np.asarray(CONFIG.phase_targets_rad["coordinated_cut"], dtype=np.float64),
+            np.asarray(CONFIG.phase_targets_rad["curl_filling"], dtype=np.float64),
             np.asarray(CONFIG.phase_targets_rad["breakout"], dtype=np.float64),
+            target_cut_depth_m=cycle_machine.config.penetration_depth_m,
+            minimum_engaged_fraction=(
+                cycle_machine.config.minimum_edge_engaged_fraction
+            ),
         )
         if REALISTIC_CUT_SCOOP
         else None
@@ -2130,6 +2138,65 @@ def main() -> None:
             values.append(float(state_height[row, column]))
         return np.asarray(values, dtype=np.float64)
 
+    def _tool_local_point_to_terrain(tool_state, point_local: np.ndarray) -> np.ndarray:
+        pose = np.asarray(tool_state.pose_terrain, dtype=np.float64)
+        point = np.asarray(point_local, dtype=np.float64)
+        homogeneous = np.append(point, 1.0)
+        transformed = pose @ homogeneous
+        return np.asarray(transformed[:3] / transformed[3], dtype=np.float64)
+
+    def cutting_direction_from_tool(tool_state) -> np.ndarray:
+        """Initial forward cutting axis along the bucket bottom toward its rear.
+
+        Progress is frozen in terrain XY at CUT entry so later curl/lift cannot
+        masquerade as additional cut distance.
+        """
+
+        edge_center = np.mean(
+            np.asarray(tool_state.cutting_edge_terrain, dtype=np.float64), axis=0
+        )
+        rear = _tool_local_point_to_terrain(
+            tool_state, np.asarray(descriptor.bottom_profile_local[0], dtype=np.float64)
+        )
+        axis = np.asarray(rear[:2] - edge_center[:2], dtype=np.float64)
+        norm = float(np.linalg.norm(axis))
+        if norm <= 1.0e-9:
+            raise RuntimeError("CUTTING_DIRECTION_DEGENERATE_BUCKET_BOTTOM_AXIS")
+        return axis / norm
+
+    def cutting_edge_engagement(tool_state) -> dict[str, float]:
+        """Sample the full bucket width against authoritative terrain state."""
+
+        edge = np.asarray(tool_state.cutting_edge_terrain, dtype=np.float64)
+        if edge.ndim != 2 or edge.shape[1] != 3 or edge.shape[0] < 2:
+            raise RuntimeError("CUTTING_EDGE_GEOMETRY_INVALID")
+        left = edge[0]
+        right = edge[-1]
+        width = float(np.linalg.norm(right - left))
+        sample_spacing = max(2.0 * min(grid.dx, grid.dy), 1.0e-3)
+        sample_count = max(5, int(np.ceil(width / sample_spacing)) + 1)
+        fractions = np.linspace(0.0, 1.0, sample_count)[:, None]
+        points = (1.0 - fractions) * left[None, :] + fractions * right[None, :]
+        surface = terrain_surface_at(
+            points,
+            None
+            if CONFIG.runtime_backend == "GPU_RUNTIME"
+            else physics_core.state.H_resting_m,
+        )
+        depths = np.asarray(surface - points[:, 2], dtype=np.float64)
+        positive_depth = np.maximum(depths, 0.0)
+        engaged = depths >= cycle_machine.config.edge_engagement_depth_m
+        center_index = sample_count // 2
+        return {
+            "maximum_depth_m": float(np.max(depths)),
+            "mean_depth_m": float(np.mean(positive_depth)),
+            "engaged_fraction": float(np.mean(engaged)),
+            "left_depth_m": float(depths[0]),
+            "center_depth_m": float(depths[center_index]),
+            "right_depth_m": float(depths[-1]),
+            "sample_count": float(sample_count),
+        }
+
     def operation_observation(tool_state) -> ExcavatorCycleObservation:
         reservoirs = physics_core.reservoir_observation()
         state = physics_core.state if CONFIG.runtime_backend == "HOST_REFERENCE" else None
@@ -2138,12 +2205,15 @@ def main() -> None:
             None if state is None else state.H_resting_m,
         )
         edge_z = np.asarray(tool_state.cutting_edge_terrain)[:, 2]
+        edge_metrics = cutting_edge_engagement(tool_state)
         base_pose, _ = base_pose_and_forward()
         return ExcavatorCycleObservation(
             timestamp_s=float(world.current_time),
             joint_position_rad=np.asarray(articulation.get_joint_positions(), dtype=np.float64).reshape(-1),
             base_pose_xy_yaw=base_pose,
-            cutting_edge_depth_m=max(latest_penetration_depth_m, float(np.max(surface - edge_z))),
+            cutting_edge_depth_m=max(
+                latest_penetration_depth_m, edge_metrics["maximum_depth_m"]
+            ),
             tool_terrain_intersection_m3=latest_intersection_volume_m3,
             cutting_distance_m=cutting_distance_m,
             cutting_lip_clearance_m=float(np.min(edge_z - surface)),
@@ -2152,6 +2222,11 @@ def main() -> None:
             mobile_volume_m3=float(reservoirs["mobile_volume_m3"]),
             airborne_volume_m3=float(reservoirs["airborne_volume_m3"]),
             terrain_settled=physics_core.terrain_settled,
+            cutting_edge_mean_depth_m=edge_metrics["mean_depth_m"],
+            cutting_edge_engaged_fraction=edge_metrics["engaged_fraction"],
+            cutting_edge_left_depth_m=edge_metrics["left_depth_m"],
+            cutting_edge_center_depth_m=edge_metrics["center_depth_m"],
+            cutting_edge_right_depth_m=edge_metrics["right_depth_m"],
         )
 
     def airborne_domain_diagnostics(state=None) -> dict[str, object]:
@@ -2287,7 +2362,10 @@ def main() -> None:
             "reason": "avoid double-counting tangential track-soil shear",
         },
         "arm_actuation": {
-            "method": "ACCELERATION_AND_VELOCITY_SLEWED_POSITION_DRIVE_WITH_FORCE_CAP",
+            "method": "EFFORT_SERVO_WITH_TARGET_VELOCITY_SLEW_AND_SHARED_POWER_LIMIT",
+            "acceleration_limit_semantics": (
+                "TARGET_VELOCITY_SLEW_BOUND_NOT_A_HARD_PHYSICAL_JOINT_ACCELERATION_BOUND"
+            ),
             "shared_positive_power_limit_w": actuator_config.shared_positive_power_limit_w,
             "root_or_link_pose_writes": 0,
             "dump_release_max_mouth_horizontal_speed_m_s": 0.25,
@@ -2383,9 +2461,6 @@ def main() -> None:
                     world.pause()
                 kinematics.reset()
                 track_drive.reset()
-                arm_drive_target_rad = np.asarray(
-                    articulation.get_joint_positions(), dtype=np.float64
-                ).reshape(-1).copy()
                 arm_actuator.reset(
                     np.asarray(
                         articulation.get_joint_velocities(), dtype=np.float64
@@ -2418,6 +2493,7 @@ def main() -> None:
                 capture_presentation_viewport("READY")
             cutting_distance_m = 0.0
             previous_cutting_center = None
+            cutting_direction_terrain_xy = None
             for key in material_funnel:
                 material_funnel[key] = 0.0
             dump_release_started = False
@@ -2618,11 +2694,13 @@ def main() -> None:
                 if decision.state is ExcavatorCycleState.CUT_AND_FILL:
                     cutting_distance_m = 0.0
                     previous_cutting_center = np.mean(current_tool.cutting_edge_terrain, axis=0)
+                    cutting_direction_terrain_xy = cutting_direction_from_tool(current_tool)
                     if realistic_cut_trajectory is not None:
                         realistic_cut_trajectory.reset(
                             np.asarray(
                                 articulation.get_joint_positions(), dtype=np.float64
-                            ).reshape(-1)
+                            ).reshape(-1),
+                            payload_m3=observation.payload_volume_m3,
                         )
                     if (
                         ARGS.cut_fill_payload_audit is not None
@@ -2648,6 +2726,16 @@ def main() -> None:
                             json.dumps(checkpoint_record, indent=2) + "\n", encoding="utf-8"
                         )
                         cut_fill_start_checkpoint_written = True
+                if (
+                    realistic_cut_trajectory is not None
+                    and decision.state is ExcavatorCycleState.CURL_AND_BREAKOUT
+                    and state_before_decision is ExcavatorCycleState.CUT_AND_FILL
+                ):
+                    realistic_cut_trajectory.begin_breakout(
+                        np.asarray(
+                            articulation.get_joint_positions(), dtype=np.float64
+                        ).reshape(-1)
+                    )
                 if (
                     FINAL_PRESENTATION
                     and final_presentation_sample.label == "LIFT"
@@ -2714,18 +2802,21 @@ def main() -> None:
                 continue
 
             commanded_joint_target_rad = decision.command.joint_target_rad
-            if (
-                realistic_cut_trajectory is not None
-                and decision.state
-                in {
-                    ExcavatorCycleState.CUT_AND_FILL,
-                    ExcavatorCycleState.CURL_AND_BREAKOUT,
-                }
-            ):
-                realistic_cut_sample = realistic_cut_trajectory.sample(
-                    CONFIG.physics_dt_s
-                )
-                commanded_joint_target_rad = realistic_cut_sample.target_rad
+            if realistic_cut_trajectory is not None:
+                if decision.state is ExcavatorCycleState.CUT_AND_FILL:
+                    realistic_cut_sample = realistic_cut_trajectory.sample_cut(
+                        CONFIG.physics_dt_s,
+                        mean_depth_m=observation.cutting_edge_mean_depth_m,
+                        engaged_fraction=observation.cutting_edge_engaged_fraction,
+                        cutting_distance_m=observation.cutting_distance_m,
+                        payload_volume_m3=observation.payload_volume_m3,
+                    )
+                    commanded_joint_target_rad = realistic_cut_sample.target_rad
+                elif decision.state is ExcavatorCycleState.CURL_AND_BREAKOUT:
+                    realistic_cut_sample = realistic_cut_trajectory.sample_breakout(
+                        CONFIG.physics_dt_s
+                    )
+                    commanded_joint_target_rad = realistic_cut_sample.target_rad
             actuator_output = apply_bounded_arm_target(commanded_joint_target_rad)
             production_physics_step_count += 1
             audit_this_step = bool(
@@ -2812,8 +2903,26 @@ def main() -> None:
                 latest_penetration_depth_m = 0.0
             if decision.state is ExcavatorCycleState.CUT_AND_FILL:
                 center = np.mean(current_tool.cutting_edge_terrain, axis=0)
+                if cutting_direction_terrain_xy is None:
+                    cutting_direction_terrain_xy = cutting_direction_from_tool(current_tool)
                 if previous_cutting_center is not None:
-                    cutting_distance_m += float(np.linalg.norm(center - previous_cutting_center))
+                    delta_xy = np.asarray(
+                        center[:2] - previous_cutting_center[:2], dtype=np.float64
+                    )
+                    forward_progress = float(
+                        np.dot(delta_xy, cutting_direction_terrain_xy)
+                    )
+                    # Count only materially engaged forward cutting.  Kinematic
+                    # motion in free air, lateral correction, lift and reverse
+                    # withdrawal cannot satisfy the excavation-distance gate.
+                    broad_engagement = bool(
+                        observation.cutting_edge_engaged_fraction
+                        >= cycle_machine.config.minimum_edge_engaged_fraction
+                        and observation.cutting_edge_mean_depth_m
+                        >= cycle_machine.config.edge_engagement_depth_m
+                    )
+                    if broad_engagement:
+                        cutting_distance_m += max(0.0, forward_progress)
                 previous_cutting_center = center
             core_wall_start = perf_counter()
             payload_before_core_m3 = float(physics_core.payload.volume_m3)

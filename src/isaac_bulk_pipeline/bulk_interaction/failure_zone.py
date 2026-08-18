@@ -746,16 +746,23 @@ class FailureZoneModel:
         raw_alpha = np.zeros(count)
         s_cut = np.zeros(count)
         terrain_z = np.zeros(count)
+        contact_support = np.zeros(count, dtype=bool)
         for i, center in enumerate(centers):
             distance = np.abs(lateral_cell - center)
             selected = affected_yx[distance <= max(0.75 * widths[i], 0.75 * max(grid.dx, grid.dy))]
+            # No nearest-contact fallback: a lateral sample with no actual
+            # positive-depth tool intersection has zero physical support and
+            # must remain exactly zero through all continuity operations.
+            # Otherwise a narrow corner/tooth contact can be spread across
+            # the bucket width and overstate both failure volume and FEE force.
             if not len(selected):
-                selected = affected_yx[np.asarray([int(np.argmin(distance))])]
+                continue
             depth_values = penetration[selected[:, 0], selected[:, 1]]
             positive = depth_values > 0.0
             selected, depth_values = selected[positive], depth_values[positive]
             if not len(selected):
                 continue
+            contact_support[i] = True
             # Robust local average: deep contact receives more weight but one
             # raster vertex can no longer dictate the complete lateral slice.
             weights_local = np.maximum(depth_values, 0.1 * float(np.mean(depth_values)))
@@ -769,12 +776,14 @@ class FailureZoneModel:
             s_cut[i] = float(np.sum((local_xy @ direction) * weights_local))
             terrain_z[i] = float(np.sum(free[selected[:, 0], selected[:, 1]] * weights_local))
 
-        depth = self._smooth_lateral(raw_depth)
-        alpha = self._smooth_lateral(raw_alpha)
+        depth = self._smooth_lateral(raw_depth, support=contact_support)
+        alpha = self._smooth_lateral(raw_alpha, support=contact_support)
         distance_to_end = np.minimum(centers - low, high - centers)
         u = np.clip(distance_to_end / self.config.lateral_transition_width_m, 0.0, 1.0)
         transition = u * u * (3.0 - 2.0 * u)
         depth *= transition
+        depth[~contact_support] = 0.0
+        alpha[~contact_support] = 0.0
 
         beta0 = np.zeros(count)
         solved0: list[_SolvedWedge | None] = [None] * count
@@ -798,14 +807,23 @@ class FailureZoneModel:
                 excluded_strip_count=len(excluded), applicability_status="OUTSIDE_FEE_DOMAIN",
                 exclusion_diagnostics=tuple(excluded),
             )
-        beta_filled = np.interp(np.arange(count), np.flatnonzero(valid), beta0[valid])
-        beta_smooth = self._smooth_lateral(beta_filled)
-        beta = (1.0 - self.config.lateral_continuity_weight) * beta_filled + self.config.lateral_continuity_weight * beta_smooth
+        beta_filled = self._fill_lateral_within_support(
+            beta0, valid=valid, support=contact_support
+        )
+        beta_supported = contact_support & (beta_filled > 0.0)
+        beta_smooth = self._smooth_lateral(
+            beta_filled, support=beta_supported
+        )
+        beta = (
+            (1.0 - self.config.lateral_continuity_weight) * beta_filled
+            + self.config.lateral_continuity_weight * beta_smooth
+        )
+        beta[~beta_supported] = 0.0
 
         requested_total = np.zeros(grid.shape, dtype=np.float64)
         pending: list[tuple[dict[str, object], _RasterContribution]] = []
         runout = np.zeros(count)
-        for i in np.flatnonzero(valid):
+        for i in np.flatnonzero(beta_supported):
             try:
                 solved = self._evaluate_beta(
                     beta_rad=float(beta[i]), depth=float(depth[i]), width=float(widths[i]),
@@ -883,7 +901,8 @@ class FailureZoneModel:
         mean_angle = sum(item.failure_angle_deg * item.wedge_volume_m3 for item in strips) / centroid_den
         profile = FailureSurfaceProfile(
             arc_length_m=centers - low, penetration_depth_m=depth, terrain_slope_rad=alpha,
-            rake_angle_rad=np.full(count, rake), beta0_rad=beta0, beta_rad=np.where(valid, beta, 0.0),
+            rake_angle_rad=np.full(count, rake), beta0_rad=beta0,
+            beta_rad=np.where(beta_supported, beta, 0.0),
             runout_length_m=runout, lateral_transition_weight=transition,
         )
         return FailureZone(
@@ -899,13 +918,73 @@ class FailureZoneModel:
             model_classification="PAPER_DIRECT_FEE_PLUS_REDUCED_ORDER_ENGINEERING_CLOSURE",
         )
 
-    def _smooth_lateral(self, values: np.ndarray) -> np.ndarray:
+    def _smooth_lateral(
+        self,
+        values: np.ndarray,
+        *,
+        support: np.ndarray | None = None,
+    ) -> np.ndarray:
         result = np.asarray(values, dtype=np.float64).copy()
+        active = (
+            np.ones(result.shape, dtype=bool)
+            if support is None
+            else np.asarray(support, dtype=bool)
+        )
+        if active.shape != result.shape:
+            raise ValueError("[FailureSurfaceV3] lateral support shape mismatch")
+        result[~active] = 0.0
         for _ in range(self.config.lateral_smoothing_passes):
-            if len(result) > 2:
-                result[1:-1] = 0.25 * result[:-2] + 0.5 * result[1:-1] + 0.25 * result[2:]
-                result[0] = 0.75 * result[0] + 0.25 * result[1]
-                result[-1] = 0.75 * result[-1] + 0.25 * result[-2]
+            previous = result.copy()
+            # Smooth only inside each contiguous physically supported run.
+            # Unsupported samples remain exact zeros and cannot receive mass,
+            # penetration depth or force support from a neighbour.
+            indices = np.flatnonzero(active)
+            if indices.size == 0:
+                break
+            breaks = np.flatnonzero(np.diff(indices) > 1) + 1
+            for segment in np.split(indices, breaks):
+                if segment.size == 1:
+                    result[segment[0]] = previous[segment[0]]
+                    continue
+                lo, hi = int(segment[0]), int(segment[-1])
+                if segment.size > 2:
+                    result[lo + 1 : hi] = (
+                        0.25 * previous[lo : hi - 1]
+                        + 0.5 * previous[lo + 1 : hi]
+                        + 0.25 * previous[lo + 2 : hi + 1]
+                    )
+                result[lo] = 0.75 * previous[lo] + 0.25 * previous[lo + 1]
+                result[hi] = 0.75 * previous[hi] + 0.25 * previous[hi - 1]
+            result[~active] = 0.0
+        return result
+
+    @staticmethod
+    def _fill_lateral_within_support(
+        values: np.ndarray,
+        *,
+        valid: np.ndarray,
+        support: np.ndarray,
+    ) -> np.ndarray:
+        """Interpolate only within contiguous physical-contact support runs."""
+
+        source = np.asarray(values, dtype=np.float64)
+        valid_mask = np.asarray(valid, dtype=bool)
+        support_mask = np.asarray(support, dtype=bool)
+        if source.shape != valid_mask.shape or source.shape != support_mask.shape:
+            raise ValueError("[FailureSurfaceV3] lateral interpolation shape mismatch")
+        result = np.zeros_like(source)
+        supported = np.flatnonzero(support_mask)
+        if supported.size == 0:
+            return result
+        breaks = np.flatnonzero(np.diff(supported) > 1) + 1
+        for segment in np.split(supported, breaks):
+            anchors = segment[valid_mask[segment]]
+            if anchors.size == 0:
+                continue
+            if anchors.size == 1:
+                result[segment] = source[anchors[0]]
+            else:
+                result[segment] = np.interp(segment, anchors, source[anchors])
         return result
 
     def _evaluate_beta(

@@ -45,6 +45,13 @@ class ExcavatorCycleConfig:
     joint_tolerance_rad: float = np.deg2rad(3.0)
     ready_position_tolerance_m: float = 0.40
     penetration_depth_m: float = 0.20
+    # Full-width engagement gates.  The old controller advanced to CUT from
+    # one deeply penetrated corner because it only used maximum edge depth.
+    # These thresholds require a material fraction of the cutting edge to be
+    # engaged before excavation can start.
+    minimum_mean_penetration_depth_m: float = 0.10
+    minimum_edge_engaged_fraction: float = 0.70
+    edge_engagement_depth_m: float = 0.025
     minimum_intersection_m3: float = 1.0e-4
     minimum_cut_distance_m: float = 0.25
     minimum_payload_gain_m3: float = 0.02
@@ -86,6 +93,8 @@ class ExcavatorCycleConfig:
             [
                 self.state_timeout_s, self.joint_tolerance_rad,
                 self.ready_position_tolerance_m, self.penetration_depth_m,
+                self.minimum_mean_penetration_depth_m,
+                self.edge_engagement_depth_m,
                 self.minimum_intersection_m3, self.minimum_cut_distance_m,
                 self.minimum_payload_gain_m3, self.breakout_lip_clearance_m,
                 self.transport_lip_clearance_m, self.reverse_distance_m,
@@ -97,6 +106,12 @@ class ExcavatorCycleConfig:
         )
         if not np.all(np.isfinite(positive)) or np.any(positive <= 0.0):
             raise ValueError("[390FCycle] physical thresholds must be finite/positive")
+        if not np.isfinite(self.minimum_edge_engaged_fraction) or not (
+            0.0 < self.minimum_edge_engaged_fraction <= 1.0
+        ):
+            raise ValueError(
+                "[390FCycle] minimum_edge_engaged_fraction must lie in (0,1]"
+            )
         if self.return_travel_timeout_s is not None and (
             not np.isfinite(self.return_travel_timeout_s)
             or self.return_travel_timeout_s <= 0.0
@@ -138,6 +153,13 @@ class ExcavatorCycleObservation:
     mobile_volume_m3: float
     airborne_volume_m3: float
     terrain_settled: bool = True
+    # Full-width cutting-edge diagnostics.  Defaults preserve compatibility
+    # with non-production tests/callers that do not yet publish them.
+    cutting_edge_mean_depth_m: float = 0.0
+    cutting_edge_engaged_fraction: float = 0.0
+    cutting_edge_left_depth_m: float = 0.0
+    cutting_edge_center_depth_m: float = 0.0
+    cutting_edge_right_depth_m: float = 0.0
 
     def __post_init__(self) -> None:
         for name, shape in (("joint_position_rad", (4,)), ("base_pose_xy_yaw", (3,))):
@@ -154,6 +176,11 @@ class ExcavatorCycleObservation:
                 self.cutting_lip_clearance_m, self.payload_volume_m3,
                 self.deposited_volume_m3, self.mobile_volume_m3,
                 self.airborne_volume_m3,
+                self.cutting_edge_mean_depth_m,
+                self.cutting_edge_engaged_fraction,
+                self.cutting_edge_left_depth_m,
+                self.cutting_edge_center_depth_m,
+                self.cutting_edge_right_depth_m,
             ],
             dtype=np.float64,
         )
@@ -162,6 +189,10 @@ class ExcavatorCycleObservation:
         nonnegative = scalars[[2, 3, 5, 6, 7, 8]]
         if np.any(nonnegative < 0.0):
             raise ValueError("[390FCycle] observed volumes/distances must be non-negative")
+        if not 0.0 <= self.cutting_edge_engaged_fraction <= 1.0:
+            raise ValueError(
+                "[390FCycle] cutting_edge_engaged_fraction must lie in [0,1]"
+            )
         if not isinstance(self.terrain_settled, (bool, np.bool_)):
             raise ValueError("[390FCycle] terrain_settled must be boolean")
         object.__setattr__(self, "terrain_settled", bool(self.terrain_settled))
@@ -234,7 +265,9 @@ class ExcavatorCycleStateMachine:
         ExcavatorCycleState.IDLE: "explicit user start command",
         ExcavatorCycleState.READY_AT_DIG_POSITION: "joint target and base at dig pose",
         ExcavatorCycleState.APPROACH: "approach joint target reached",
-        ExcavatorCycleState.PENETRATE: "cutting-edge depth and tool-terrain intersection",
+        ExcavatorCycleState.PENETRATE: (
+            "full-width cutting-edge engagement, mean/max depth and tool-terrain intersection"
+        ),
         ExcavatorCycleState.CUT_AND_FILL: "cut distance and measured payload gain",
         ExcavatorCycleState.CURL_AND_BREAKOUT: "curl target and cutting lip clear of active pile",
         ExcavatorCycleState.LIFT_TO_TRANSPORT_HEIGHT: "lift target and safe lip clearance",
@@ -242,8 +275,8 @@ class ExcavatorCycleStateMachine:
         ExcavatorCycleState.ALIGN_DUMP: "swing target and measured dump position",
         ExcavatorCycleState.DUMP: "dump orientation and measured payload release",
         ExcavatorCycleState.DEPOSITION: (
-            "deposition gain, dump-origin airborne parcels settled, and "
-            "terrain below physical mobile/instability stop criteria"
+            "dump-origin airborne parcels settled and terrain below physical "
+            "mobile/instability stop criteria"
         ),
         ExcavatorCycleState.BUCKET_RECOVERY: "recovery joint target reached",
         ExcavatorCycleState.RETURN_TRAVEL: "joint target and measured return to dig pose",
@@ -259,9 +292,7 @@ class ExcavatorCycleStateMachine:
         self._state_start_s = 0.0
         self._last_timestamp_s: float | None = None
         self._entry_payload_m3 = 0.0
-        self._entry_deposited_m3 = 0.0
         self._dump_entry_payload_m3 = 0.0
-        self._dump_entry_deposited_m3 = 0.0
         self._entry_base_xy = np.zeros(2)
         self._failure: ExcavatorCycleFailure | None = None
         self._last_base_pose = np.array(self.dig_pose, copy=True)
@@ -280,7 +311,6 @@ class ExcavatorCycleStateMachine:
         self._last_timestamp_s = observation.timestamp_s
         self._failure = None
         self._dump_entry_payload_m3 = 0.0
-        self._dump_entry_deposited_m3 = 0.0
         self._last_base_pose = np.array(observation.base_pose_xy_yaw, copy=True)
         self._enter(ExcavatorCycleState.READY_AT_DIG_POSITION, observation)
 
@@ -354,8 +384,23 @@ class ExcavatorCycleStateMachine:
             if at_target:
                 return ExcavatorCycleState.PENETRATE, "approach_configuration_reached"
         elif state is ExcavatorCycleState.PENETRATE:
-            if obs.cutting_edge_depth_m >= c.penetration_depth_m and obs.tool_terrain_intersection_m3 >= c.minimum_intersection_m3:
-                return ExcavatorCycleState.CUT_AND_FILL, "depth_and_intersection_verified"
+            # A single deeply buried tooth/corner is not a valid excavation
+            # engagement.  Require a substantial fraction of the full cutting
+            # edge plus a meaningful mean depth before the cut controller owns
+            # the motion.  This is resolution-aware through the configured
+            # edge_engagement_depth_m published by the runner.
+            if (
+                obs.cutting_edge_depth_m >= c.penetration_depth_m
+                and obs.cutting_edge_mean_depth_m
+                >= c.minimum_mean_penetration_depth_m
+                and obs.cutting_edge_engaged_fraction
+                >= c.minimum_edge_engaged_fraction
+                and obs.tool_terrain_intersection_m3 >= c.minimum_intersection_m3
+            ):
+                return (
+                    ExcavatorCycleState.CUT_AND_FILL,
+                    "full_width_depth_and_intersection_verified",
+                )
         elif state is ExcavatorCycleState.CUT_AND_FILL:
             if obs.cutting_distance_m >= c.minimum_cut_distance_m and obs.payload_volume_m3 - self._entry_payload_m3 >= c.minimum_payload_gain_m3:
                 return ExcavatorCycleState.CURL_AND_BREAKOUT, "cut_distance_and_payload_gain_verified"
@@ -380,18 +425,18 @@ class ExcavatorCycleStateMachine:
             ):
                 return ExcavatorCycleState.DEPOSITION, "dump_orientation_and_payload_release_verified"
         elif state is ExcavatorCycleState.DEPOSITION:
-            deposited = obs.deposited_volume_m3 - self._dump_entry_deposited_m3
-            # Whole-domain Mobile includes the still-evolving excavation
-            # failure zone and is not a valid dump-completion gate. Dump is
-            # complete when its released parcels have increased resting
-            # terrain and no dump-origin airborne parcel remains.
+            # Whole-domain Resting gain is not dump provenance: unrelated
+            # Mobile->Resting deposition elsewhere in the terrain can change
+            # it.  DUMP entry already requires a measured payload release;
+            # deposition completion therefore waits for the released airborne
+            # material to clear and for the complete terrain dynamics to meet
+            # their physical stop criteria.  MassLedger closes the material
+            # balance without inventing a global-Resting proxy for provenance.
             if (
-                deposited
-                >= min(c.minimum_deposition_gain_m3, self._dump_entry_payload_m3)
-                and obs.airborne_volume_m3 <= c.empty_payload_tolerance_m3
+                obs.airborne_volume_m3 <= c.empty_payload_tolerance_m3
                 and obs.terrain_settled
             ):
-                return ExcavatorCycleState.BUCKET_RECOVERY, "deposition_and_settling_verified"
+                return ExcavatorCycleState.BUCKET_RECOVERY, "dump_airborne_cleared_and_terrain_settled"
         elif state is ExcavatorCycleState.BUCKET_RECOVERY:
             if at_target:
                 return ExcavatorCycleState.RETURN_TRAVEL, "bucket_recovery_verified"
@@ -410,11 +455,9 @@ class ExcavatorCycleStateMachine:
 
     def _enter(self, state: ExcavatorCycleState, obs: ExcavatorCycleObservation) -> None:
         if state is ExcavatorCycleState.DUMP:
-            # Preserve the material baseline across DUMP -> DEPOSITION.  The
-            # same physics step that releases a parcel may also land it; using
-            # a fresh DEPOSITION entry baseline would erase that real gain.
+            # Preserve the released-payload baseline for audit.  Whole-domain
+            # Resting volume is intentionally not used as dump provenance.
             self._dump_entry_payload_m3 = obs.payload_volume_m3
-            self._dump_entry_deposited_m3 = obs.deposited_volume_m3
         if (
             state is ExcavatorCycleState.REVERSE_TRAVEL
             and self.config.dynamic_dump_from_reverse_entry
@@ -450,7 +493,6 @@ class ExcavatorCycleStateMachine:
         self._state = state
         self._state_start_s = obs.timestamp_s
         self._entry_payload_m3 = obs.payload_volume_m3
-        self._entry_deposited_m3 = obs.deposited_volume_m3
         self._entry_base_xy = np.array(obs.base_pose_xy_yaw[:2], copy=True)
 
     def _joint_target_reached(self, obs: ExcavatorCycleObservation) -> bool:

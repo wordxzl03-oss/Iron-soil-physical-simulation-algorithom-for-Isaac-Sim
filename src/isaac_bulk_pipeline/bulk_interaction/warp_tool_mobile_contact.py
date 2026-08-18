@@ -227,6 +227,9 @@ def _kernels(wp: Any) -> tuple[Any, Any]:
         contact_mask: wp.array(dtype=wp.int32),
         normal_x: wp.array(dtype=wp.float64),
         normal_y: wp.array(dtype=wp.float64),
+        normal3_x: wp.array(dtype=wp.float64),
+        normal3_y: wp.array(dtype=wp.float64),
+        normal3_z: wp.array(dtype=wp.float64),
         normal_terrain_x: wp.array(dtype=wp.float64),
         normal_terrain_y: wp.array(dtype=wp.float64),
         normal_terrain_z: wp.array(dtype=wp.float64),
@@ -372,8 +375,6 @@ def _kernels(wp: Any) -> tuple[Any, Any]:
             if inside:
                 normal = -face_normal
         horizontal_length = wp.sqrt(normal[0] * normal[0] + normal[1] * normal[1])
-        if horizontal_length <= wp.float64(_EPS):
-            return
 
         reference = wp.vec3d(reference_x, reference_y, reference_z)
         linear = wp.vec3d(linear_x, linear_y, linear_z)
@@ -381,14 +382,21 @@ def _kernels(wp: Any) -> tuple[Any, Any]:
         surface_velocity = linear + wp.cross(omega, closest - reference)
         contact_mask[index] = 1
         material_mask[index] = 1
-        normal_x[index] = normal[0] / horizontal_length
-        normal_y[index] = normal[1] / horizontal_length
-        # Preserve the CPU oracle's published support contract exactly: its
-        # ``horizontal = normal[:2]`` view normalizes x/y in place while z
-        # retains the 3-D closest-point component.  The fused law consumes the
-        # same projected unit x/y values.
-        normal_terrain_x[index] = normal[0] / horizontal_length
-        normal_terrain_y[index] = normal[1] / horizontal_length
+        # Keep the historical normalized XY projection strictly for the CPU
+        # oracle/legacy diagnostics. Production contact consumes ``normal3``.
+        # Thus a nearly vertical face can no longer become a unit horizontal
+        # bulldozing direction while old support-format tests remain valid.
+        if horizontal_length > wp.float64(_EPS):
+            normal_x[index] = normal[0] / horizontal_length
+            normal_y[index] = normal[1] / horizontal_length
+        else:
+            normal_x[index] = wp.float64(0.0)
+            normal_y[index] = wp.float64(0.0)
+        normal3_x[index] = normal[0]
+        normal3_y[index] = normal[1]
+        normal3_z[index] = normal[2]
+        normal_terrain_x[index] = normal[0]
+        normal_terrain_y[index] = normal[1]
         normal_terrain_z[index] = normal[2]
         velocity_x[index] = surface_velocity[0]
         velocity_y[index] = surface_velocity[1]
@@ -457,6 +465,7 @@ class WarpExactToolMobileContactGeometry:
             self.runtime.zeros("v2_tool_closest_face_index", state.size, dtype=wp.int32)
         for name in (
             "v2_tool_normal_x", "v2_tool_normal_y",
+            "v2_tool_normal3_x", "v2_tool_normal3_y", "v2_tool_normal3_z",
             "v2_tool_normal_terrain_x", "v2_tool_normal_terrain_y",
             "v2_tool_normal_terrain_z",
             "v2_tool_velocity_x", "v2_tool_velocity_y", "v2_tool_velocity_z",
@@ -486,6 +495,7 @@ class WarpExactToolMobileContactGeometry:
         static_h2d_before = runtime.telemetry.h2d_bytes
         for name in (
             "v2_tool_contact_mask", "v2_tool_normal_x", "v2_tool_normal_y",
+            "v2_tool_normal3_x", "v2_tool_normal3_y", "v2_tool_normal3_z",
             "v2_tool_normal_terrain_x", "v2_tool_normal_terrain_y",
             "v2_tool_normal_terrain_z", "v2_tool_velocity_x", "v2_tool_velocity_y",
             "v2_tool_velocity_z",
@@ -533,6 +543,9 @@ class WarpExactToolMobileContactGeometry:
                 *reference.tolist(), *linear.tolist(), *omega.tolist(),
                 runtime.arrays["v2_tool_contact_mask"],
                 runtime.arrays["v2_tool_normal_x"], runtime.arrays["v2_tool_normal_y"],
+                runtime.arrays["v2_tool_normal3_x"],
+                runtime.arrays["v2_tool_normal3_y"],
+                runtime.arrays["v2_tool_normal3_z"],
                 runtime.arrays["v2_tool_normal_terrain_x"],
                 runtime.arrays["v2_tool_normal_terrain_y"],
                 runtime.arrays["v2_tool_normal_terrain_z"],

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping
 
@@ -234,8 +234,11 @@ class SoilForceResult:
     application_point_model: str = "CUTTING_EDGE_STRIP_RESULTANT"
     term_classifications: Mapping[str, str] = field(
         default_factory=lambda: {
-            "quasi_static_failure": "LITERATURE_BASED_REDUCED_ORDER",
-            "active_momentum": "CONSERVATION_BASED_ENGINEERING_MODEL",
+            "quasi_static_failure": "LITERATURE_BASED_REDUCED_ORDER_F_SEP",
+            "penetration_resistance": (
+                "NOT_IMPLEMENTED_INDEPENDENT_F_PEN_REQUIRES_CALIBRATED_MODEL"
+            ),
+            "active_momentum": "CONSERVATION_BASED_ENGINEERING_MODEL_F_INTERFACE",
             "contact_resultant": "ENGINEERING_APPROXIMATION",
         },
         compare=False,
@@ -376,34 +379,20 @@ class SoilForceModel:
         force = static_force + dynamic_force
         torque = static_torque + dynamic_torque
         unclipped = float(np.linalg.norm(force))
-        # A measured Mobile contact impulse is a conservation constraint, not
-        # a fitted soil-force estimate, and may never be scaled independently
-        # of the +J written to Mobile.  The legacy safety cap therefore applies
-        # only to the quasi-static FailureSurface channel.
+        # A force threshold is diagnostic/fail-fast only.  Rescaling a valid
+        # FEE result to a configured cap silently changes the machine physics
+        # and can hide a bad failure-support/contact state.  Dynamic Mobile
+        # reaction is likewise a measured conservation channel and must never
+        # be clipped independently of the +J written to Mobile.
         static_unclipped = float(np.linalg.norm(static_force))
-        limited = static_unclipped > self.config.maximum_resultant_force_n
-        scale = 1.0
-        if limited:
-            scale = self.config.maximum_resultant_force_n / static_unclipped
-            static_force *= scale
-            static_torque *= scale
-            total_cut *= scale
-            total_normal *= scale
-            strips = [
-                replace(
-                    strip,
-                    weight_component_n=strip.weight_component_n * scale,
-                    cohesion_component_n=strip.cohesion_component_n * scale,
-                    surcharge_component_n=strip.surcharge_component_n * scale,
-                    inertial_component_n=strip.inertial_component_n * scale,
-                    cutting_resistance_n=strip.cutting_resistance_n * scale,
-                    normal_resistance_n=strip.normal_resistance_n * scale,
-                    force_terrain_n=strip.force_terrain_n * scale,
-                )
-                for strip in strips
-            ]
-            force = static_force + dynamic_force
-            torque = static_torque + dynamic_torque
+        if static_unclipped > self.config.maximum_resultant_force_n:
+            raise RuntimeError(
+                "SOIL_FORCE_RESULTANT_EXCEEDS_DIAGNOSTIC_LIMIT: "
+                f"quasi_static={static_unclipped:.9g} N, "
+                f"limit={self.config.maximum_resultant_force_n:.9g} N, "
+                f"strip_count={len(strips)}, "
+                f"active_failure_volume={failure_zone.active_volume_m3:.9g} m^3"
+            )
 
         point = (
             cutting_center
@@ -427,7 +416,7 @@ class SoilForceModel:
             active_momentum_resultant_force_n=float(np.linalg.norm(dynamic_force)),
             resultant_force_n=float(np.linalg.norm(force)),
             unclipped_resultant_force_n=unclipped,
-            force_was_limited=limited,
+            force_was_limited=False,
             strip_results=tuple(strips),
             momentum_budget=momentum_budget,
         )

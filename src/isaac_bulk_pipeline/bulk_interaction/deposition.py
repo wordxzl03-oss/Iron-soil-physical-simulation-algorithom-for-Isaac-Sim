@@ -126,18 +126,15 @@ class DepositionOperator:
             & ~forcing
         )
         before_mobile_volume = integrator.integrate(mobile)
-        # A total Mobile tail smaller than one dx*dy*min(dx,dy) voxel cannot
-        # carry a resolved spatial avalanche on this formal 0.05 m grid.
-        # Relabelling it to Resting preserves the free surface and volume; the
-        # subsequent residual MiniSlope handles any remaining static slope.
-        subcell_tail = before_mobile_volume <= grid.dx * grid.dy * min(grid.dx, grid.dy)
-        if subcell_tail:
-            eligible = (mobile > 0.0) & ~forcing
-        elif self.config.require_below_stop_angle:
+        # No resolution-dependent "tail settling" is permitted here.  Even a
+        # very small Mobile reservoir must satisfy the same constitutive
+        # speed/Y_stop criteria as a larger one; otherwise grid resolution
+        # silently changes material physics and can erase real moving mass.
+        if self.config.require_below_stop_angle:
             eligible &= ~yield_state.continue_mask
         deposited = np.where(
             eligible,
-            mobile if subcell_tail else np.minimum(mobile, self.config.settling_rate_m_s * dt),
+            np.minimum(mobile, self.config.settling_rate_m_s * dt),
             0.0,
         )
         deposited_volume = integrator.integrate(deposited)

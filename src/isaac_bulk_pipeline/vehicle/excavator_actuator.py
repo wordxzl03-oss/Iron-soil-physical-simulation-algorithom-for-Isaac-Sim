@@ -1,4 +1,4 @@
-"""Force-, velocity-, power- and acceleration-limited 390F joint actuation."""
+"""Force/power-limited 390F actuation with bounded target-velocity slew."""
 
 from __future__ import annotations
 
@@ -114,12 +114,12 @@ class ExcavatorActuatorOutput:
 class ExcavatorActuatorModel:
     """Causal normalized velocity servo intended to drive PhysX by effort.
 
-    Desired joint position is converted to a bounded velocity.  That target is
-    acceleration-slewed, and full effort is reached only when velocity error
-    equals the published/configured speed bound.  A shared positive mechanical
-    power cap is applied last.  External loads remain in PhysX, so the same
-    command under higher resistance produces lower speed rather than a pose
-    teleport.
+    Desired joint position is converted to a bounded velocity.  The *target
+    velocity* is slew-limited using ``acceleration_limit_rad_s2``; this is not
+    a hard bound on measured physical joint acceleration, which still follows
+    multibody inertia, gravity, payload and external soil loads in PhysX.  Full
+    effort is reached only when velocity error equals the configured speed
+    bound, and a shared positive mechanical power cap is applied last.
     """
 
     def __init__(self, config: ExcavatorActuatorConfig, dof_names: Sequence[str]) -> None:

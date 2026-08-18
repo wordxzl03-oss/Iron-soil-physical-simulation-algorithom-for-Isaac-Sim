@@ -863,6 +863,22 @@ class EarthmovingPhysicsCore:
                     + mobile.tool_mobile_contact_prepare_dispatch_ms
                     + mobile.tool_mobile_impulse_fused_upper_bound_ms
                 )
+            except Exception:
+                # A failed fused Mobile step never reaches deposition.  Do not
+                # leave a stale occupancy mask that could suppress settling if
+                # a higher layer retries the physics step.
+                chain.state.runtime.arrays["deposition_exclusion_mask"].zero_()
+                raise
+            else:
+                # Snapshot geometric occupancy independently of the transient
+                # forcing mask.  Deposition must not solidify Mobile material
+                # inside/under the bucket merely because the force source has
+                # been cleared after the fused Mobile step.
+                state_runtime = chain.state.runtime
+                state_runtime.wp.copy(
+                    state_runtime.arrays["deposition_exclusion_mask"],
+                    state_runtime.arrays["v2_tool_contact_mask"],
+                )
             finally:
                 chain.clear_failure_tool_forcing(failure)
             start = perf_counter()
@@ -939,6 +955,25 @@ class EarthmovingPhysicsCore:
                 ),
                 timings_ms=dict(timings),
             )
+            # Mobile -> Resting is a material-state transition governed by
+            # the existing low-speed/cohesive Y_stop deposition eligibility,
+            # not by the task-state label.  Keeping it disabled throughout
+            # PENETRATE/CUT/CURL leaves arrested Mobile permanently resident,
+            # prevents residual slope closure from ever becoming eligible and
+            # can freeze steep post-cut morphology.  Tool forcing has already
+            # been cleared and bucket intake has already consumed valid mouth
+            # flux, so this step only settles the remaining physically
+            # eligible Mobile.  Do not use the non-DIG subcell-tail shortcut
+            # here because it bypasses speed/slope eligibility.
+            start = perf_counter()
+            try:
+                chain.step_deposition(dt_s)
+            finally:
+                # Transient geometry occupancy must never leak into the next
+                # physics step, even if the deposition operator raises.
+                chain.state.runtime.arrays["deposition_exclusion_mask"].zero_()
+            timings["deposition"] = (perf_counter() - start) * 1_000.0
+            timings["deposition_ms"] = timings["deposition"]
             metadata.advance_time(dt_s)
         else:
             if phase == "dump_spill":
@@ -965,13 +1000,7 @@ class EarthmovingPhysicsCore:
             )
             timings["mobile_substeps"] = float(mobile.substeps)
             start = perf_counter()
-            deposition = chain.step_deposition(
-                dt_s,
-                settle_subcell_tail=(
-                    mobile.volume_after_m3
-                    <= self.grid.dx * self.grid.dy * min(self.grid.dx, self.grid.dy)
-                ),
-            )
+            deposition = chain.step_deposition(dt_s)
             timings["deposition"] = (perf_counter() - start) * 1_000.0
             timings["deposition_ms"] = timings["deposition"]
             # Landing points are provenance, not proof of instability.  The
@@ -1033,18 +1062,11 @@ class EarthmovingPhysicsCore:
                 self._gpu_frontier_active_tiles,
                 avalanche_transition.residual_seed_tile_ids,
             ).astype(np.int32, copy=False)
-        # Y_start describes stress on Resting material; it does not by itself
-        # prove that a *new* tranche is eligible.  A tranche which mobilized,
-        # returned locally and left H_free unchanged remains latched to prevent
-        # a zero-transport R->M->R loop.  Only positive currently mobilizable
-        # volume may own the physical-flow path and exclude residual/final
-        # closure.
+        # Constitutive Y_start owns the physical failure path even while a
+        # currently exposed tranche is latched.  Residual MiniSlope must never
+        # flatten a cell that the material model still declares yielded.
         physical_yield_present = bool(
             avalanche_transition.unstable_cell_count > 0
-            and avalanche_transition.largest_connected_mobilizable_volume_m3
-            > self.avalanche_controller.config.dry_tolerance_m
-            * self.grid.dx
-            * self.grid.dy
         )
         residual_advanced_this_step = False
         residual_start = perf_counter()
@@ -1769,13 +1791,8 @@ class EarthmovingPhysicsCore:
                 self._host_mobile_export_cumulative_m3
             ),
         )
-        if (
-            result.diagnostics.classification
-            == self.avalanche_controller.LOCAL_STATIC_INSTABILITY
-        ):
-            self._dump_deposition_seed_mask |= (
-                result.diagnostics.largest_connected_mask
-            )
+        # Local Y_start now transfers through the physical Mobile path.  It is
+        # not a residual MiniSlope event and must not be flattened here.
         if not result.transitioned:
             return result
         next_state = TerrainState(

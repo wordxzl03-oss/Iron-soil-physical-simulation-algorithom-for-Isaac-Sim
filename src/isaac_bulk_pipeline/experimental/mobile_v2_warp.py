@@ -76,6 +76,10 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
         qx: wp.array(dtype=wp.float64),
         qy: wp.array(dtype=wp.float64),
         weights: wp.array(dtype=wp.float64),
+        ownership: wp.array(dtype=wp.int32),
+        exported_cumulative: wp.array(dtype=wp.float64),
+        flux_exported_cumulative: wp.array(dtype=wp.float64),
+        transport_crossings: wp.array(dtype=wp.float64),
         dh: wp.array(dtype=wp.float64),
         dqx: wp.array(dtype=wp.float64),
         dqy: wp.array(dtype=wp.float64),
@@ -196,6 +200,33 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
         wp.atomic_add(dqy, left, -scale_l * flux_l_qy)
         wp.atomic_add(dqy, right, scale_r * flux_r_qy)
 
+        # Bookkeeping is derived from the exact same authoritative shared-face
+        # mass transfer used above.  ``transfer_volume`` is already a physical
+        # volume [m^3]; it must never be divided by either endpoint's dual area.
+        #
+        # ``flux_exported_cumulative`` records every donor-side conservative
+        # crossing as transport telemetry.  ``exported_cumulative`` is the
+        # tranche-departure evidence used by LargeAvalanche and deliberately
+        # records the *same real donor-side export even across owned->owned
+        # faces*.  Requiring the receiver to be unowned deadlocks multi-cell
+        # ownership chains (A->B->C->outside): interior donors would never get
+        # departure evidence.  LargeAvalanche independently requires H_free to
+        # fall below the activation-time owned surface, so reversible/internal
+        # face traffic alone still cannot release a tranche.
+        transfer_volume = flux_h * face_length * dt
+        if transfer_volume > wp.float64(0.0):
+            amount = transfer_volume
+            wp.atomic_add(transport_crossings, 0, amount)
+            wp.atomic_add(flux_exported_cumulative, left, amount)
+            if ownership[left] != 0:
+                wp.atomic_add(exported_cumulative, left, amount)
+        elif transfer_volume < wp.float64(0.0):
+            amount = -transfer_volume
+            wp.atomic_add(transport_crossings, 0, amount)
+            wp.atomic_add(flux_exported_cumulative, right, amount)
+            if ownership[right] != 0:
+                wp.atomic_add(exported_cumulative, right, amount)
+
     @wp.kernel
     def apply_update_and_sources(
         h: wp.array(dtype=wp.float64),
@@ -209,12 +240,19 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
         tool_contact_mask: wp.array(dtype=wp.int32),
         tool_normal_x: wp.array(dtype=wp.float64),
         tool_normal_y: wp.array(dtype=wp.float64),
+        tool_normal_z: wp.array(dtype=wp.float64),
         tool_velocity_x: wp.array(dtype=wp.float64),
         tool_velocity_y: wp.array(dtype=wp.float64),
+        tool_velocity_z: wp.array(dtype=wp.float64),
         tool_contact_point_x: wp.array(dtype=wp.float64),
         tool_contact_point_y: wp.array(dtype=wp.float64),
         tool_contact_point_z: wp.array(dtype=wp.float64),
+        b_eff: wp.array(dtype=wp.float64),
         weights: wp.array(dtype=wp.float64),
+        rows: int,
+        cols: int,
+        dx: wp.float64,
+        dy: wp.float64,
         dt: wp.float64,
         g: wp.float64,
         mu: wp.float64,
@@ -250,35 +288,138 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
         vx_contact = vx0
         vy_contact = vy0
         if tool_contact_mask[i] != 0:
-            nx = tool_normal_x[i]
-            ny = tool_normal_y[i]
-            tvx = tool_velocity_x[i]
-            tvy = tool_velocity_y[i]
-            relative_x = vx0 - tvx
-            relative_y = vy0 - tvy
-            closing = relative_x * nx + relative_y * ny
-            if closing < wp.float64(0.0):
-                normal_delta = -closing
-                tangent_x = -ny
-                tangent_y = nx
-                slip = relative_x * tangent_x + relative_y * tangent_y
-                tangent_delta_magnitude = wp.min(wp.abs(slip), tool_mu * normal_delta)
-                tangent_delta = wp.float64(0.0)
-                if slip > wp.float64(0.0):
-                    tangent_delta = -tangent_delta_magnitude
-                elif slip < wp.float64(0.0):
-                    tangent_delta = tangent_delta_magnitude
-                delta_vx = normal_delta * nx + tangent_delta * tangent_x
-                delta_vy = normal_delta * ny + tangent_delta * tangent_y
-                vx_contact = vx0 + delta_vx
-                vy_contact = vy0 + delta_vy
-                impulse_x = depth * delta_vx * weight
-                impulse_y = depth * delta_vy * weight
-                normal_impulse = depth * normal_delta * weight
-                tangent_impulse = depth * wp.abs(tangent_delta) * weight
-                impulse_magnitude = wp.sqrt(
-                    impulse_x * impulse_x + impulse_y * impulse_y
+            # Rauter/Tukovic-style 3-D Cartesian kinematics while retaining a
+            # depth-integrated state: reconstruct the material world velocity
+            # from the local basal/support-surface tangent plane, resolve bucket contact
+            # against the true 3-D bucket normal, then project the correction
+            # back onto the terrain tangent.  This removes the former failure
+            # mode where a near-vertical normal was normalized in XY and became
+            # an artificial horizontal bulldozing impulse.
+            row = i // cols
+            col = i - row * cols
+            left = i if col == 0 else i - 1
+            right = i if col + 1 == cols else i + 1
+            down = i if row == 0 else i - cols
+            up = i if row + 1 == rows else i + cols
+            denom_x = dx if (col == 0 or col + 1 == cols) else wp.float64(2.0) * dx
+            denom_y = dy if (row == 0 or row + 1 == rows) else wp.float64(2.0) * dy
+            gx = (b_eff[right] - b_eff[left]) / denom_x
+            gy = (b_eff[up] - b_eff[down]) / denom_y
+            terrain_normal = wp.normalize(wp.vec3d(-gx, -gy, wp.float64(1.0)))
+            mobile3 = wp.vec3d(vx0, vy0, vx0 * gx + vy0 * gy)
+            tool3 = wp.vec3d(
+                tool_velocity_x[i], tool_velocity_y[i], tool_velocity_z[i]
+            )
+            bucket_normal = wp.normalize(wp.vec3d(
+                tool_normal_x[i], tool_normal_y[i], tool_normal_z[i]
+            ))
+            relative3 = mobile3 - tool3
+            closing3 = wp.dot(relative3, bucket_normal)
+            if closing3 < wp.float64(0.0):
+                normal_delta = -closing3
+
+                # Full 3-D request is retained only as a dimensionality oracle.
+                slip3 = relative3 - closing3 * bucket_normal
+                slip_speed = wp.length(slip3)
+                requested_tangent_delta3 = wp.vec3d(
+                    wp.float64(0.0), wp.float64(0.0), wp.float64(0.0)
                 )
+                if slip_speed > wp.float64(1.0e-15):
+                    requested_tangent_magnitude = wp.min(
+                        slip_speed, tool_mu * normal_delta
+                    )
+                    requested_tangent_delta3 = (
+                        -requested_tangent_magnitude / slip_speed
+                    ) * slip3
+                requested_delta3 = (
+                    normal_delta * bucket_normal + requested_tangent_delta3
+                )
+
+                # The authoritative Mobile V2 state stores only q_x,q_y.
+                # Contact detection above uses true 3-D geometry and the
+                # kinematically reconstructed world velocity, but the accepted
+                # reduced impulse must remain in world XY.  Do NOT renormalize
+                # the surviving normal components: a near-vertical bucket face
+                # must not turn into an artificial unit horizontal push.
+                bucket_normal_xy = wp.vec3d(
+                    bucket_normal[0], bucket_normal[1], wp.float64(0.0)
+                )
+                normal_represented_delta3 = normal_delta * bucket_normal_xy
+                normal_xy_norm2 = wp.dot(bucket_normal_xy, bucket_normal_xy)
+
+                relative_xy3 = wp.vec3d(
+                    relative3[0], relative3[1], wp.float64(0.0)
+                )
+                slip_represented3 = relative_xy3
+                if normal_xy_norm2 > wp.float64(1.0e-30):
+                    slip_represented3 = (
+                        slip_represented3
+                        - bucket_normal_xy
+                        * (
+                            wp.dot(slip_represented3, bucket_normal_xy)
+                            / normal_xy_norm2
+                        )
+                    )
+                slip_represented_speed = wp.length(slip_represented3)
+                tangent_represented_delta3 = wp.vec3d(
+                    wp.float64(0.0), wp.float64(0.0), wp.float64(0.0)
+                )
+                represented_normal_magnitude = wp.length(
+                    normal_represented_delta3
+                )
+                if (
+                    slip_represented_speed > wp.float64(1.0e-15)
+                    and represented_normal_magnitude > wp.float64(0.0)
+                ):
+                    tangent_represented_magnitude = wp.min(
+                        slip_represented_speed,
+                        tool_mu * represented_normal_magnitude,
+                    )
+                    tangent_represented_delta3 = (
+                        -tangent_represented_magnitude
+                        / slip_represented_speed
+                    ) * slip_represented3
+
+                raw_represented_delta3 = (
+                    normal_represented_delta3 + tangent_represented_delta3
+                )
+                represented_norm2 = wp.dot(
+                    raw_represented_delta3, raw_represented_delta3
+                )
+                passivity_scale = wp.float64(0.0)
+                if represented_norm2 > wp.float64(1.0e-30):
+                    available_work_per_mass = wp.dot(
+                        raw_represented_delta3, tool3 - mobile3
+                    )
+                    if available_work_per_mass > wp.float64(0.0):
+                        passivity_scale = wp.min(
+                            wp.float64(1.0),
+                            wp.float64(2.0) * available_work_per_mass
+                            / represented_norm2,
+                        )
+                normal_accepted_delta3 = (
+                    passivity_scale * normal_represented_delta3
+                )
+                tangent_accepted_delta3 = (
+                    passivity_scale * tangent_represented_delta3
+                )
+                represented_delta3 = (
+                    normal_accepted_delta3 + tangent_accepted_delta3
+                )
+                vx_contact = vx0 + represented_delta3[0]
+                vy_contact = vy0 + represented_delta3[1]
+                # Contact energy is measured in the authoritative horizontal
+                # kinetic-energy state.  The reconstructed z velocity is an
+                # oracle for 3-D closing, not stored q_z.
+                impulse3 = depth * weight * represented_delta3
+                requested_impulse3 = depth * weight * requested_delta3
+                normal_impulse = (
+                    depth * wp.length(normal_accepted_delta3) * weight
+                )
+                tangent_impulse = (
+                    depth * wp.length(tangent_accepted_delta3) * weight
+                )
+                impulse_magnitude = wp.length(impulse3)
                 kinetic_change = (
                     wp.float64(0.5) * depth
                     * (
@@ -287,29 +428,46 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
                     )
                     * weight
                 )
-                tool_work = impulse_x * tvx + impulse_y * tvy
-                slip_after = (
-                    (vx_contact - tvx) * tangent_x
-                    + (vy_contact - tvy) * tangent_y
+                tool_work = (
+                    impulse3[0] * tool3[0] + impulse3[1] * tool3[1]
                 )
-                friction_dissipation = (
+                # Friction-only telemetry uses the accepted tangential
+                # correction after the accepted normal correction.
+                vx_after_normal = vx0 + normal_accepted_delta3[0]
+                vy_after_normal = vy0 + normal_accepted_delta3[1]
+                friction_kinetic_change = (
                     wp.float64(0.5) * depth
-                    * wp.max(wp.float64(0.0), slip * slip - slip_after * slip_after)
+                    * (
+                        vx_contact * vx_contact + vy_contact * vy_contact
+                        - vx_after_normal * vx_after_normal
+                        - vy_after_normal * vy_after_normal
+                    )
                     * weight
+                )
+                friction_tool_work = (
+                    depth * weight
+                    * (
+                        tangent_accepted_delta3[0] * tool3[0]
+                        + tangent_accepted_delta3[1] * tool3[1]
+                    )
+                )
+                friction_dissipation = wp.max(
+                    wp.float64(0.0),
+                    friction_tool_work - friction_kinetic_change,
                 )
                 rx = tool_contact_point_x[i] - tool_reference_x
                 ry = tool_contact_point_y[i] - tool_reference_y
                 rz = tool_contact_point_z[i] - tool_reference_z
-                wp.atomic_add(diagnostics, 9, impulse_x)
-                wp.atomic_add(diagnostics, 10, impulse_y)
+                wp.atomic_add(diagnostics, 9, impulse3[0])
+                wp.atomic_add(diagnostics, 10, impulse3[1])
                 wp.atomic_add(diagnostics, 11, normal_impulse)
                 wp.atomic_add(diagnostics, 12, tangent_impulse)
                 wp.atomic_add(diagnostics, 13, kinetic_change)
                 wp.atomic_add(diagnostics, 14, tool_work)
                 wp.atomic_add(diagnostics, 15, friction_dissipation)
-                wp.atomic_add(diagnostics, 16, -rz * impulse_y)
-                wp.atomic_add(diagnostics, 17, rz * impulse_x)
-                wp.atomic_add(diagnostics, 18, rx * impulse_y - ry * impulse_x)
+                wp.atomic_add(diagnostics, 16, ry * impulse3[2] - rz * impulse3[1])
+                wp.atomic_add(diagnostics, 17, rz * impulse3[0] - rx * impulse3[2])
+                wp.atomic_add(diagnostics, 18, rx * impulse3[1] - ry * impulse3[0])
                 wp.atomic_add(diagnostics, 19, wp.float64(1.0))
                 wp.atomic_add(diagnostics, 20, depth * weight)
                 wp.atomic_add(diagnostics, 21, weight)
@@ -318,6 +476,16 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
                 wp.atomic_add(diagnostics, 24, tool_contact_point_z[i] * impulse_magnitude)
                 wp.atomic_add(diagnostics, 25, impulse_magnitude)
                 wp.atomic_add(diagnostics, 26, tool_work - kinetic_change)
+                # New dimensionality audit: requested 3-D impulse versus the
+                # terrain-tangent impulse representable by this 2.5-D state.
+                wp.atomic_add(diagnostics, 27, requested_impulse3[0])
+                wp.atomic_add(diagnostics, 28, requested_impulse3[1])
+                wp.atomic_add(diagnostics, 29, requested_impulse3[2])
+                wp.atomic_add(diagnostics, 30, impulse3[2])
+                wp.atomic_add(
+                    diagnostics, 31, wp.length(requested_impulse3 - impulse3)
+                )
+                wp.atomic_add(diagnostics, 32, wp.abs(closing3))
 
         # General external acceleration remains a separate source.  Tool
         # contact is an impulse above, not a hidden acceleration field.
@@ -382,6 +550,9 @@ class WarpMobileV2ReferenceSolver:
             rt.upload(name, np.asarray(value).ravel(), dtype=wp.float64)
         for name in ("v2_dh", "v2_dqx", "v2_dqy"):
             rt.zeros(name, size, dtype=wp.float64)
+        rt.zeros("v2_ownership", size, dtype=wp.int32)
+        rt.zeros("v2_export_cumulative", size, dtype=wp.float64)
+        rt.zeros("v2_flux_export_cumulative", size, dtype=wp.float64)
         rt.upload(
             "v2_weights",
             np.full(size, config.dx_m * config.dy_m, dtype=np.float64),
@@ -391,8 +562,8 @@ class WarpMobileV2ReferenceSolver:
         rt.zeros("v2_external_y", size, dtype=wp.float64)
         rt.zeros("v2_tool_contact_mask", size, dtype=wp.int32)
         for name in (
-            "v2_tool_normal_x", "v2_tool_normal_y",
-            "v2_tool_velocity_x", "v2_tool_velocity_y",
+            "v2_tool_normal3_x", "v2_tool_normal3_y", "v2_tool_normal3_z",
+            "v2_tool_velocity_x", "v2_tool_velocity_y", "v2_tool_velocity_z",
             "v2_tool_contact_point_x", "v2_tool_contact_point_y",
             "v2_tool_contact_point_z",
         ):
@@ -418,7 +589,8 @@ class WarpMobileV2ReferenceSolver:
         remaining = float(dt_s)
         substeps = 0
         max_cfl = 0.0
-        diagnostics_total = np.zeros(27)
+        diagnostics_total = np.zeros(33)
+        transport_crossings = wp.zeros(1, dtype=wp.float64, device=rt.device)
         while remaining > 1.0e-14:
             if substeps >= config.maximum_substeps:
                 raise RuntimeError("Warp MobileV2 maximum_substeps exceeded")
@@ -446,23 +618,30 @@ class WarpMobileV2ReferenceSolver:
                 rt.arrays["v2_b"], rt.arrays["v2_h"],
                 rt.arrays["v2_qx"], rt.arrays["v2_qy"],
                 rt.arrays["v2_weights"],
+                rt.arrays["v2_ownership"],
+                rt.arrays["v2_export_cumulative"],
+                rt.arrays["v2_flux_export_cumulative"],
+                transport_crossings,
                 rt.arrays["v2_dh"], rt.arrays["v2_dqx"], rt.arrays["v2_dqy"],
                 rows, cols, x_edges, config.dx_m, config.dy_m, sub_dt,
                 config.earth_pressure_coefficient, config.gravity_m_s2,
                 config.dry_tolerance_m,
             ])
-            diagnostics = wp.zeros(27, dtype=wp.float64, device=rt.device)
+            diagnostics = wp.zeros(33, dtype=wp.float64, device=rt.device)
             rt.launch(kernels[3], dim=size, inputs=[
                 rt.arrays["v2_h"], rt.arrays["v2_qx"], rt.arrays["v2_qy"],
                 rt.arrays["v2_dh"], rt.arrays["v2_dqx"], rt.arrays["v2_dqy"],
                 rt.arrays["v2_external_x"], rt.arrays["v2_external_y"],
                 rt.arrays["v2_tool_contact_mask"],
-                rt.arrays["v2_tool_normal_x"], rt.arrays["v2_tool_normal_y"],
+                rt.arrays["v2_tool_normal3_x"], rt.arrays["v2_tool_normal3_y"],
+                rt.arrays["v2_tool_normal3_z"],
                 rt.arrays["v2_tool_velocity_x"], rt.arrays["v2_tool_velocity_y"],
+                rt.arrays["v2_tool_velocity_z"],
                 rt.arrays["v2_tool_contact_point_x"],
                 rt.arrays["v2_tool_contact_point_y"],
                 rt.arrays["v2_tool_contact_point_z"],
-                rt.arrays["v2_weights"],
+                rt.arrays["v2_b"], rt.arrays["v2_weights"],
+                rows, cols, config.dx_m, config.dy_m,
                 sub_dt, config.gravity_m_s2, config.basal_friction_coefficient,
                 wp.float64(0.0), wp.float64(0.0), wp.float64(0.0), wp.float64(0.0),
                 config.dry_tolerance_m, diagnostics,

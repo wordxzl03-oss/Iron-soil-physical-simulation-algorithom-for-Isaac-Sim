@@ -34,7 +34,7 @@ terrain:
 
 material:
   scenario_file: configs/literature/iron_ore_condition_scenarios.json
-  scenario_id: MOHAJERI_I3_AS_RECEIVED_LOW_STRESS_NEAR_MATCHED
+  scenario_id: MOHAJERI_I3_ADV25D_EFFECTIVE_COHESION_300PA
 
 physics:
   physics_dt_s: 0.016666666666666666
@@ -71,8 +71,6 @@ large_avalanche_transition:
   minimum_mean_excess_start_deg: 0.0
   persistence_time_s: 0.12
   mobilization_depth_m: 0.08
-  gravity_velocity_length_m: 0.25
-  velocity_efficiency: 0.45
   mobile_activity_speed_m_s: 0.05
   mobile_activity_volume_m3: 1.0e-5
   dry_tolerance_m: 1.0e-8
@@ -99,9 +97,10 @@ track_soil:
   mechanics_status: CONSERVATIVE_REDUCED_ORDER_PENDING_Bekker_Wong_CALIBRATION
 
 operation:
-  # Production P0 trajectory: continuous, actuator-limited A-E curl-scoop.
-  # This changes only arm target scheduling; all soil physics/task gates stay
-  # authoritative and unchanged.
+  # Production P0 trajectory: feedback-driven, state-synchronised backhoe dig.
+  # CUT keeps the cutting edge engaged while stick retraction and bucket curl
+  # overlap; breakout is forbidden until the state machine observes the cut and
+  # payload completion gates.  Soil physics remain authoritative.
   realistic_cut_scoop_enabled: true
   cycle_count: 3
   dig_position_terrain_m: [5.5, 17.5, 1.8]
@@ -122,11 +121,17 @@ operation:
     initial_pose: [0.0, -15.0, 45.0, -100.0]
     approach_pile: [0.0, -15.0, 35.333333, -80.0]
     penetrate: [0.0, -10.0, 16.0, -60.0]
-    coordinated_cut: [0.0, -10.0, 6.333333, -60.0]
+    # Fallback target if the feedback controller is disabled: retract stick
+    # while beginning bucket curl; never extend the stick with the bucket held
+    # open as in the former target.
+    coordinated_cut: [0.0, -11.0, 20.0, -30.0]
     # The CAD-derived retention check establishes the bucket-joint polarity:
     # positive curl retains material, while the negative limit opens the mouth
     # downward.  The earlier sequence had carry and dump polarities reversed.
-    curl_filling: [0.0, -15.0, 25.666667, 30.0]
+    # Filling target stays below the breakout/lift pose.  The feedback
+    # controller depth-holds the edge during this motion and only enters the
+    # breakout target after the physical CUT gate has passed.
+    curl_filling: [0.0, -12.0, 24.0, 20.0]
     # CAD self-collision/linkage closure makes the old simultaneous
     # stick=45/bucket=60 command unreachable.  These observed reachable poses
     # retain the full 5.63 m3 geometry while preserving transport clearance.

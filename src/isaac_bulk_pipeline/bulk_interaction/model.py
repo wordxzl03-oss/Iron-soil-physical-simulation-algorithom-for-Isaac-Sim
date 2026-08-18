@@ -105,7 +105,7 @@ class BulkMaterialInteractionModel:
                 activated,
                 np.minimum(intersection.penetration_depth_m, before.H_resting_m),
             )
-            activation_mode = "GEOMETRIC_SWEEP_ONLY_OUTSIDE_FEE_FORCE_DOMAIN"
+            activation_mode = "GEOMETRIC_SWEEP_OUTSIDE_FEE_REQUIRES_UNRESOLVED_F_PEN"
         elif not np.any(activated > 0.0):
             activation_mode = "NONE"
         activated_volume = integrator.integrate(activated)
@@ -134,7 +134,7 @@ class BulkMaterialInteractionModel:
                     (
                         "failure_zone_activation"
                         if activation_mode == "FEE_FAILURE_ZONE"
-                        else "cad_geometric_sweep_outside_fee_force_domain"
+                        else "cad_geometric_sweep_outside_fee_requires_unresolved_f_pen"
                     ),
                 )
             )

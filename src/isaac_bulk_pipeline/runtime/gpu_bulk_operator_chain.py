@@ -239,14 +239,10 @@ class GpuBulkOperatorChain:
         self._record("TrackSoil", start, dirty.size)
         return result
 
-    def step_deposition(
-        self, dt_s: float, *, settle_subcell_tail: bool = False
-    ) -> WarpDepositionStep:
+    def step_deposition(self, dt_s: float) -> WarpDepositionStep:
         start = perf_counter()
         self.state.capture_surface_for_dirty_tracking()
-        result = self.deposition.step_resident(
-            self.material, dt_s, settle_subcell_tail=settle_subcell_tail
-        )
+        result = self.deposition.step_resident(self.material, dt_s)
         dirty = self.state.collect_surface_dirty_tiles()
         self._audit_boundary("AFTER_DEPOSITION")
         self._record("Deposition", start, dirty.size)

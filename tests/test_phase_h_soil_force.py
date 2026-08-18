@@ -235,24 +235,17 @@ class PhaseHSoilForceTests(unittest.TestCase):
         self.assertGreaterEqual(result.normal_resistance_n, 0.0)
         self.assertTrue(all(strip.inertial_component_n == 0.0 for strip in result.strip_results))
 
-    def test_force_limit_is_explicit_not_infinite(self):
-        result = self.force(
-            depth=0.4,
-            speed=3.0,
-            config=SoilForceConfig(maximum_resultant_force_n=10_000.0),
-        )
-        self.assertTrue(result.force_was_limited)
-        self.assertAlmostEqual(result.resultant_force_n, 10_000.0)
-        self.assertGreater(result.unclipped_resultant_force_n, result.resultant_force_n)
-        self.assertTrue(np.allclose(
-            sum(
-                (strip.force_terrain_n for strip in result.strip_results),
-                start=np.zeros(3),
-            ),
-            result.quasi_static_force_terrain_n,
-        ))
+    def test_force_limit_is_fail_fast_not_a_physical_clip(self):
+        with self.assertRaisesRegex(
+            RuntimeError, "SOIL_FORCE_RESULTANT_EXCEEDS_DIAGNOSTIC_LIMIT"
+        ):
+            self.force(
+                depth=0.4,
+                speed=3.0,
+                config=SoilForceConfig(maximum_resultant_force_n=10_000.0),
+            )
 
-    def test_force_limit_never_scales_conservative_mobile_reaction(self):
+    def test_diagnostic_fee_limit_never_scales_conservative_mobile_reaction(self):
         intersection, failure, tool = self.interaction(depth=0.4, speed=0.0)
         budget = MobileMomentumBudget(
             momentum_before_terrain_kg_m_s=np.zeros(3),
@@ -263,12 +256,15 @@ class PhaseHSoilForceTests(unittest.TestCase):
             tool_impulse_on_mobile_terrain_ns=np.asarray([20_000.0, 0.0, 0.0]),
             integration_window_s=0.01,
         )
+        # Keep the FEE/quasi-static channel below the diagnostic threshold while
+        # allowing the conservative Tool-Mobile reaction to exceed it.  The
+        # measured +J/-J channel must never be rescaled independently.
         result = SoilForceModel(
-            SoilForceConfig(maximum_resultant_force_n=10_000.0)
+            SoilForceConfig(maximum_resultant_force_n=100_000.0)
         ).compute(
             failure, intersection, self.material, self.descriptor, tool, budget
         )
-        self.assertTrue(result.force_was_limited)
+        self.assertFalse(result.force_was_limited)
         self.assertAlmostEqual(result.active_momentum_resultant_force_n, 2_000_000.0)
         self.assertGreater(result.resultant_force_n, 1_990_000.0)
         self.assertTrue(np.allclose(budget.action_reaction_residual_terrain_ns, 0.0))

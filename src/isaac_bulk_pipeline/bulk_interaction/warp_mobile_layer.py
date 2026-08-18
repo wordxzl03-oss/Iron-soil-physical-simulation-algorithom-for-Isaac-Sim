@@ -266,10 +266,13 @@ def _kernels(wp: Any) -> Any:
         # Count every actual donor-limited crossing independently of the
         # avalanche-ownership release bookkeeping below.
         wp.atomic_add(flux_exported_cumulative, donor, amount)
-        # Ownership is released only by an actual donor-limited conservative
-        # transfer crossing out of the currently owned activation region.
-        # Candidate flux and Eulerian H_free changes are not evidence.
-        if ownership[donor] != 0 and ownership[receiver] == 0:
+        # Every actual donor-side crossing from an owned activation cell is
+        # conservative departure evidence.  Restricting this to
+        # owned->unowned faces starves interior cells of a multi-cell owned
+        # component.  LargeAvalanche also requires activation-surface H_free
+        # departure, so internal/reversible traffic alone cannot unlock a
+        # tranche.
+        if ownership[donor] != 0:
             wp.atomic_add(exported_cumulative, donor, amount)
         carried_x = amount * velocity_x[donor]
         carried_y = amount * velocity_y[donor]

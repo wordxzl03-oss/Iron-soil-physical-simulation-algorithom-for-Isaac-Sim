@@ -193,7 +193,7 @@ def test_device_deposition_settles_mobile_blanket_over_steep_substrate():
 
 
 @GPU_REQUIRED
-def test_device_deposition_conservatively_closes_subcell_mobile_tail():
+def test_device_deposition_does_not_force_settle_unresolved_fast_tail():
     grid = _grid()
     material = _material()
     integrator = TerrainVolumeIntegrator.from_grid(grid)
@@ -213,10 +213,8 @@ def test_device_deposition_conservatively_closes_subcell_mobile_tail():
     )
     state.begin_physics_step()
     chain = GpuBulkOperatorChain(state, material, grid, integrator)
-    result = chain.step_deposition(1.0 / 60.0, settle_subcell_tail=True)
+    result = chain.step_deposition(1.0 / 60.0)
     view = state.explicit_host_view(source="acceptance")
-    assert result.deposited_volume_m3 == pytest.approx(
-        integrator.integrate(mobile), abs=1e-13
-    )
+    assert result.deposited_volume_m3 == pytest.approx(0.0, abs=1e-13)
     np.testing.assert_allclose(view.H_resting_m, reference.H_resting_m, atol=1e-13)
-    np.testing.assert_allclose(view.H_mobile_m, 0.0, atol=1e-13)
+    np.testing.assert_allclose(view.H_mobile_m, reference.mobile_height_m, atol=1e-13)

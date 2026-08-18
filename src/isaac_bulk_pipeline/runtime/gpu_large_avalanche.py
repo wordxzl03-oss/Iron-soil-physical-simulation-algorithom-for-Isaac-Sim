@@ -143,23 +143,29 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
         # A latch owns one mobilized tranche.  An empty local Mobile cell is
         # not, by itself, evidence that the tranche left: deposition can put
         # the same material straight back into Resting in the same cell.  The
-        # next tranche becomes eligible only after authoritative H_free has
-        # fallen below the surface captured at activation (net departure), or
-        # after the moving state is physically stable under Y_stop.
+        # next tranche becomes eligible only after BOTH (a) conservative
+        # shared-face transport has exported material from the owned donor cell
+        # and (b) authoritative H_free has actually fallen
+        # below the surface captured at activation.  The second condition
+        # rejects reversible/numerical face traffic which does not represent
+        # net tranche departure.  Physical stabilization under Y_stop remains
+        # an independent release path.
         free_surface = resting[index] + mobile[index]
         exported_since_activation = (
             export_cumulative[index] - owned_export_baseline[index]
         )
-        resolved_export = exported_since_activation > dry_tolerance * weights[index]
-        if (
-            release_settled_latches != 0
-            and speed <= activity_speed
-            and (
-                resolved_export
-                or stop_margin <= wp.float64(0.0)
-            )
-        ):
-            latch[index] = 0
+        resolved_export = (
+            exported_since_activation > dry_tolerance * weights[index]
+            and free_surface < owned_surface[index] - dry_tolerance
+        )
+        if release_settled_latches != 0:
+            # Conservative tranche departure is sufficient even while the
+            # neighbouring Mobile field is still moving.  The alternative
+            # stabilization release remains a quiet/Y_stop condition.
+            if resolved_export or (
+                speed <= activity_speed and stop_margin <= wp.float64(0.0)
+            ):
+                latch[index] = 0
 
     @wp.kernel
     def union_pass(
@@ -218,12 +224,13 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
             return
         root = root_of(parent, index)
         weight = weights[index]
-        transfer = wp.float64(0.0)
-        if latch[index] == 0:
-            transfer = wp.min(
-                wp.max(resting[index] - z_base[index], wp.float64(0.0)),
-                mobilization_depth * severity[index],
-            )
+        # Component volume is a physical event-scale diagnostic and therefore
+        # does not disappear while the current tranche is latched.  Ownership
+        # only controls whether this step can transfer a new tranche.
+        transfer = wp.min(
+            wp.max(resting[index] - z_base[index], wp.float64(0.0)),
+            mobilization_depth * severity[index],
+        )
         excess = wp.max(slope_angle[index] - start_angle_rad, wp.float64(0.0))
         wp.atomic_add(counts, root, 1)
         wp.atomic_add(areas, root, weight)
@@ -294,11 +301,12 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
         seed_frontier: int,
     ):
         index = wp.tid()
-        belongs = parent[index] >= 0 and root_of(parent, index) == diag_i[2]
+        unstable_cell = parent[index] >= 0
+        belongs = unstable_cell and root_of(parent, index) == diag_i[2]
         previous[index] = 0
         if belongs and keep_candidate != 0:
             previous[index] = 1
-        if belongs and seed_frontier != 0:
+        if unstable_cell and seed_frontier != 0:
             reached[index] = 1
             row = index // cols
             col = index - row * cols
@@ -330,13 +338,12 @@ def _kernels(wp: Any) -> tuple[Any, ...]:
         activation_time_s: wp.float64,
         density: wp.float64,
         mobilization_depth: wp.float64,
-        gravity_length: wp.float64,
-        velocity_efficiency: wp.float64,
-        mobile_friction: wp.float64,
         dry_tolerance: wp.float64,
     ):
         index = wp.tid()
-        if parent[index] < 0 or root_of(parent, index) != diag_i[2] or latch[index] != 0:
+        # Y_start is the constitutive Resting->Mobile authorization.  Connected
+        # size/persistence classify a large event but never veto local yield.
+        if parent[index] < 0 or latch[index] != 0:
             return
         transfer = wp.min(
             wp.max(resting[index] - z_base[index], wp.float64(0.0)),
@@ -512,7 +519,8 @@ class DeviceLargeAvalancheBridge:
 
     backend_identity = "GPU_RUNTIME_DEVICE_CONNECTED_LARGE_AVALANCHE"
     NO_LARGE_EVENT = "NO_LARGE_EVENT"
-    LOCAL_STATIC_INSTABILITY = "LOCAL_STATIC_INSTABILITY"
+    LOCAL_YIELD_MOBILE_PATH = "LOCAL_YIELD_MOBILE_PATH"
+    LOCAL_STATIC_INSTABILITY = LOCAL_YIELD_MOBILE_PATH  # compatibility alias
     PERSISTING_LARGE_UNSTABLE_REGION = "PERSISTING_LARGE_UNSTABLE_REGION"
     LARGE_AVALANCHE_MOBILE_PATH = "LARGE_AVALANCHE_MOBILE_PATH"
 
@@ -665,13 +673,13 @@ class DeviceLargeAvalancheBridge:
             )
         else:
             self._persistence_s = 0.0
-        ready = candidate and self._persistence_s >= self.config.persistence_time_s
-        if ready:
+        large_ready = candidate and self._persistence_s >= self.config.persistence_time_s
+        if large_ready:
             classification = self.LARGE_AVALANCHE_MOBILE_PATH
         elif candidate:
             classification = self.PERSISTING_LARGE_UNSTABLE_REGION
         elif int(diag_i[3]) > 0:
-            classification = self.LOCAL_STATIC_INSTABILITY
+            classification = self.LOCAL_YIELD_MOBILE_PATH
         else:
             classification = self.NO_LARGE_EVENT
 
@@ -682,13 +690,15 @@ class DeviceLargeAvalancheBridge:
                 rt.arrays["avalanche_parent"], rt.arrays["avalanche_previous_component"],
                 rt.arrays["frontier_reached"], rt.arrays["dirty_tile_flags"],
                 rt.arrays["avalanche_diag_int"], self.grid.nx, state.tile_size,
-                state.tile_shape[1], int(candidate), int(classification == self.LOCAL_STATIC_INSTABILITY),
+                state.tile_shape[1], int(candidate), int(int(diag_i[3]) > 0),
             ],
         )
         self._has_previous = candidate
         transferred = 0.0
         impulse = np.zeros(2, dtype=np.float64)
-        if ready:
+        # Constitutive local yielding is immediate; persistence only promotes
+        # the event classification to LARGE_AVALANCHE_MOBILE_PATH.
+        if int(diag_i[3]) > 0:
             state.capture_surface_for_dirty_tracking()
             rt.launch(
                 kernels[8], dim=size,
@@ -709,9 +719,6 @@ class DeviceLargeAvalancheBridge:
                     state.timestamp_device_s,
                     self.material.assumed_bulk_density_kg_m3,
                     self.config.mobilization_depth_m,
-                    self.config.gravity_velocity_length_m,
-                    self.config.velocity_efficiency,
-                    self.material.mobile_friction_coefficient,
                     self.config.dry_tolerance_m,
                 ],
             )

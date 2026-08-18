@@ -73,6 +73,149 @@ class FrictionalWallImpulse:
         return -self.total_impulse_xy_ns
 
 
+@dataclass(frozen=True)
+class SurfaceConstrainedWallImpulse:
+    requested_impulse_xyz_ns: np.ndarray
+    represented_impulse_xyz_ns: np.ndarray
+    unresolved_impulse_xyz_ns: np.ndarray
+    represented_mobile_velocity_xyz_m_s: np.ndarray
+    closing_speed_m_s: float
+    normal_impulse_ns: float
+    tangential_impulse_ns: float
+
+    @property
+    def machine_reaction_impulse_xyz_ns(self) -> np.ndarray:
+        return -self.represented_impulse_xyz_ns
+
+
+def resolve_surface_constrained_frictional_wall_impulse(
+    *,
+    mobile_mass_kg: float,
+    mobile_velocity_xyz_m_s: np.ndarray,
+    tool_velocity_xyz_m_s: np.ndarray,
+    bucket_outward_normal_xyz: np.ndarray,
+    terrain_normal_xyz: np.ndarray,
+    tool_mobile_friction_coefficient: float,
+) -> SurfaceConstrainedWallImpulse:
+    """Resolve true-3D closing for a state that stores only horizontal momentum.
+
+    ``mobile_velocity_xyz_m_s`` may include a kinematically reconstructed world-Z
+    component (for example motion tangent to the local terrain), so contact
+    detection uses the real 3-D bucket normal.  The authoritative Mobile V2
+    state, however, stores only ``q_x,q_y`` on the horizontal grid.  Therefore
+    the *accepted* reduced impulse is restricted to the world-XY subspace.
+
+    The projected bucket normal is deliberately **not** renormalized.  A bucket
+    face whose normal is almost vertical consequently has only a small
+    representable horizontal effect instead of becoming an artificial unit
+    horizontal bulldozing normal.  A full 3-D inelastic/Coulomb impulse is kept
+    only as a dimensionality oracle; its unresolved part is never injected into
+    the 2.5-D state or returned as machine reaction.
+
+    The reduced correction is scaled analytically, only toward zero, so the
+    state-consistent moving-wall inequality ``W_tool - DeltaK_xy >= 0`` holds.
+    This is a conservation/passivity constraint, not an empirical damping term.
+    """
+
+    mass = float(mobile_mass_kg)
+    mu = float(tool_mobile_friction_coefficient)
+    mobile = np.asarray(mobile_velocity_xyz_m_s, dtype=np.float64)
+    tool = np.asarray(tool_velocity_xyz_m_s, dtype=np.float64)
+    bucket_n = np.asarray(bucket_outward_normal_xyz, dtype=np.float64)
+    terrain_n = np.asarray(terrain_normal_xyz, dtype=np.float64)
+    if mass < 0.0 or mu < 0.0 or not np.isfinite(mass + mu):
+        raise ValueError("[ToolMobileContact] mass/mu must be finite/non-negative")
+    if any(value.shape != (3,) for value in (mobile, tool, bucket_n, terrain_n)):
+        raise ValueError("[ToolMobileContact] 3-D vectors must have shape (3,)")
+    if not np.all(np.isfinite(np.r_[mobile, tool, bucket_n, terrain_n])):
+        raise ValueError("[ToolMobileContact] 3-D vectors must be finite")
+    bucket_norm = float(np.linalg.norm(bucket_n))
+    terrain_norm = float(np.linalg.norm(terrain_n))
+    if bucket_norm <= _EPS or terrain_norm <= _EPS:
+        raise ValueError("[ToolMobileContact] normals must be nonzero")
+    bucket_n = bucket_n / bucket_norm
+    # Validate/normalize the support normal because callers use this helper as
+    # the CPU oracle for the GPU terrain-tangent velocity reconstruction.  It is
+    # intentionally not used as an impulse subspace: q_x,q_y, not a finite-area
+    # surface momentum, remain authoritative in Mobile V2.
+    terrain_n = terrain_n / terrain_norm
+    relative = mobile - tool
+    closing = float(relative @ bucket_n)
+    zero = np.zeros(3, dtype=np.float64)
+    if mass == 0.0 or closing >= 0.0:
+        return SurfaceConstrainedWallImpulse(
+            _ro(zero), _ro(zero), _ro(zero), _ro(mobile), closing, 0.0, 0.0
+        )
+    normal_delta = -closing
+
+    # Full 3-D contact request retained only for dimensionality/error audit.
+    slip3 = relative - closing * bucket_n
+    slip3_speed = float(np.linalg.norm(slip3))
+    requested_tangent_delta = zero.copy()
+    if slip3_speed > _EPS:
+        requested_tangent_delta = (
+            -min(slip3_speed, mu * normal_delta) * slip3 / slip3_speed
+        )
+    requested_delta = normal_delta * bucket_n + requested_tangent_delta
+
+    # Representable normal response in authoritative (x,y) momentum space.
+    # No normalization after dropping z.
+    bucket_normal_xy = np.asarray([bucket_n[0], bucket_n[1], 0.0])
+    normal_represented_delta = normal_delta * bucket_normal_xy
+
+    # Coulomb slip inside the representable XY contact tangent.
+    relative_xy = np.asarray([relative[0], relative[1], 0.0])
+    normal_xy_norm2 = float(bucket_normal_xy @ bucket_normal_xy)
+    slip_represented = relative_xy.copy()
+    if normal_xy_norm2 > _EPS * _EPS:
+        slip_represented -= bucket_normal_xy * float(
+            (slip_represented @ bucket_normal_xy) / normal_xy_norm2
+        )
+    slip_represented_speed = float(np.linalg.norm(slip_represented))
+    tangent_represented_delta = zero.copy()
+    represented_normal_magnitude = float(np.linalg.norm(normal_represented_delta))
+    if slip_represented_speed > _EPS and represented_normal_magnitude > 0.0:
+        tangent_represented_delta = (
+            -min(slip_represented_speed, mu * represented_normal_magnitude)
+            * slip_represented
+            / slip_represented_speed
+        )
+
+    raw_represented_delta = normal_represented_delta + tangent_represented_delta
+
+    # State-consistent passivity for the q_x,q_y kinetic-energy measure.
+    represented_norm2 = float(raw_represented_delta @ raw_represented_delta)
+    passivity_scale = 0.0
+    if represented_norm2 > _EPS * _EPS:
+        available_work_per_mass = float(
+            raw_represented_delta @ (tool - mobile)
+        )
+        if available_work_per_mass > 0.0:
+            passivity_scale = min(
+                1.0, 2.0 * available_work_per_mass / represented_norm2
+            )
+    normal_accepted_delta = passivity_scale * normal_represented_delta
+    tangent_accepted_delta = passivity_scale * tangent_represented_delta
+    represented_delta = normal_accepted_delta + tangent_accepted_delta
+
+    requested = mass * requested_delta
+    represented = mass * represented_delta
+    unresolved = requested - represented
+    represented_velocity = mobile.copy()
+    represented_velocity[0:2] += represented_delta[0:2]
+    # z is kinematic/unresolved in Mobile V2 and is not impulsively changed by
+    # a q_x,q_y update in this reduced contact oracle.
+    return SurfaceConstrainedWallImpulse(
+        _ro(requested),
+        _ro(represented),
+        _ro(unresolved),
+        _ro(represented_velocity),
+        closing,
+        float(mass * np.linalg.norm(normal_accepted_delta)),
+        float(mass * np.linalg.norm(tangent_accepted_delta)),
+    )
+
+
 def resolve_frictional_wall_impulse(
     *,
     mobile_mass_kg: float,

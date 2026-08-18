@@ -19,6 +19,7 @@ from isaac_bulk_pipeline.bulk_state import (
     TerrainVolumeIntegrator,
 )
 from isaac_bulk_pipeline.interaction.continuous_sweep import SweepResult
+from isaac_bulk_pipeline.soil_force import SoilForceConfig, SoilForceModel
 from isaac_bulk_pipeline.terrain import TerrainGrid
 from isaac_bulk_pipeline.tools import (
     BucketGeometryDescriptor,
@@ -110,6 +111,20 @@ class PhaseFBulkInteractionTests(unittest.TestCase):
             sampled_poses=(np.eye(4),),
         )
 
+    def narrow_sweep(self, depth=0.2):
+        rows, cols = np.indices(self.grid.shape)
+        x = self.grid.origin_x + cols * self.grid.dx
+        y = self.grid.origin_y + rows * self.grid.dy
+        mask = (np.abs(x) <= 0.11) & (np.abs(y) <= 0.08)
+        surface = np.full(self.grid.shape, np.inf)
+        surface[mask] = 1.0 - depth
+        return SweepResult(
+            affected_bbox_grid=(19, 18, 22, 23),
+            affected_mask=mask,
+            cut_surface=surface,
+            sampled_poses=(np.eye(4),),
+        )
+
     def test_intersection_is_candidate_only_and_topology_integrated(self):
         H = np.ones(self.grid.shape)
         before = H.copy()
@@ -151,6 +166,58 @@ class PhaseFBulkInteractionTests(unittest.TestCase):
             stronger.estimated_total_resistance_n,
             failure.estimated_total_resistance_n,
         )
+
+    def test_failure_surface_v3_never_spreads_narrow_contact_outside_support(self):
+        H = np.ones(self.grid.shape)
+        wide_intersection = ToolTerrainIntersectionModel().compute(
+            H, self.sweep(0.25), self.tool_state(), self.grid, self.integrator
+        )
+        narrow_intersection = ToolTerrainIntersectionModel().compute(
+            H, self.narrow_sweep(0.25), self.tool_state(), self.grid, self.integrator
+        )
+        wide = FailureZoneModel().compute(
+            wide_intersection, H, self.material, self.grid, self.integrator
+        )
+        narrow = FailureZoneModel().compute(
+            narrow_intersection, H, self.material, self.grid, self.integrator
+        )
+        self.assertIsNotNone(narrow.failure_surface_profile)
+        profile = narrow.failure_surface_profile
+        nonzero = np.flatnonzero(profile.penetration_depth_m > 0.0)
+        self.assertGreater(nonzero.size, 0)
+        # The computational edge spans 2 m, but only the central ~0.2 m has
+        # actual positive-depth support.  Continuity may smooth *inside* that
+        # support and must never create depth at unsupported edge samples.
+        supported_arc = profile.arc_length_m[nonzero]
+        self.assertLess(float(np.ptp(supported_arc)), 0.45)
+        self.assertLess(len(narrow.strip_geometries), len(wide.strip_geometries))
+        self.assertLess(
+            narrow.estimated_total_resistance_n,
+            wide.estimated_total_resistance_n,
+        )
+
+    def test_soil_force_diagnostic_limit_fails_fast_instead_of_clipping(self):
+        H = np.ones(self.grid.shape)
+        tool_state = self.tool_state()
+        intersection = ToolTerrainIntersectionModel().compute(
+            H, self.sweep(0.25), tool_state, self.grid, self.integrator
+        )
+        failure = FailureZoneModel().compute(
+            intersection, H, self.material, self.grid, self.integrator
+        )
+        model = SoilForceModel(
+            SoilForceConfig(maximum_resultant_force_n=1.0)
+        )
+        with self.assertRaisesRegex(
+            RuntimeError, "SOIL_FORCE_RESULTANT_EXCEEDS_DIAGNOSTIC_LIMIT"
+        ):
+            model.compute(
+                failure,
+                intersection,
+                self.material,
+                self.descriptor,
+                tool_state,
+            )
 
     def test_mobile_finite_volume_is_positive_closed_and_heading_sensitive(self):
         H = np.zeros(self.grid.shape)
@@ -298,10 +365,10 @@ class PhaseFBulkInteractionTests(unittest.TestCase):
             atol=1.0e-14,
         )
 
-    def test_subcell_mobile_tail_is_conservatively_relabelled(self):
+    def test_subcell_mobile_tail_is_not_force_settled_by_resolution(self):
         resting = np.zeros(self.grid.shape)
-        # Below one dx*dy*min(dx,dy) voxel on the formal grid, placed on a
-        # deliberately steep local substrate to exercise the tail closure.
+        # Below one dx*dy*min(dx,dy) voxel on the formal grid.  Resolution is
+        # not a constitutive stop criterion: this fast tail must remain Mobile.
         resting[20, 20] = 0.20
         mobile = np.zeros(self.grid.shape)
         mobile[20, 21] = 0.01
@@ -312,9 +379,16 @@ class PhaseFBulkInteractionTests(unittest.TestCase):
             resting, mobile, momentum, self.material, self.grid,
             self.integrator, 1.0 / 60.0,
         )
-        self.assertEqual(self.integrator.integrate(result.mobile_height_m), 0.0)
         self.assertAlmostEqual(
-            self.integrator.integrate(result.H_resting_m), before, places=12
+            self.integrator.integrate(result.mobile_height_m),
+            self.integrator.integrate(mobile),
+            places=12,
+        )
+        self.assertAlmostEqual(result.deposited_volume_m3, 0.0, places=12)
+        self.assertAlmostEqual(
+            self.integrator.integrate(result.H_resting_m + result.mobile_height_m),
+            before,
+            places=12,
         )
 
     def test_full_step_commits_exact_ledger_and_swept_is_not_payload(self):

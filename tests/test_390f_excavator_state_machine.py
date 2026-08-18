@@ -44,6 +44,11 @@ def observation(cfg, state, time, *, base=(0.0, 0.0, 0.0), depth=0.0,
         time, cfg.phase_targets_rad[target_key], np.asarray(base), depth,
         intersection, cut_distance, clearance, payload, deposited, mobile,
         airborne,
+        cutting_edge_mean_depth_m=max(0.0, depth),
+        cutting_edge_engaged_fraction=1.0 if depth > 0.0 else 0.0,
+        cutting_edge_left_depth_m=depth,
+        cutting_edge_center_depth_m=depth,
+        cutting_edge_right_depth_m=depth,
     )
 
 
@@ -231,6 +236,51 @@ class ExcavatorCycleStateMachineTests(unittest.TestCase):
         self.assertEqual(machine.step(moving).state, ExcavatorCycleState.DEPOSITION)
         self.assertEqual(
             machine.step(replace(moving, timestamp_s=1.0, terrain_settled=True)).state,
+            ExcavatorCycleState.BUCKET_RECOVERY,
+        )
+
+    def test_deposition_completion_ignores_unrelated_global_resting_gain(self):
+        cfg = config()
+        machine = ExcavatorCycleStateMachine(
+            cfg, np.zeros(3), np.array([5.0, 0.0, 0.0])
+        )
+        initial = observation(cfg, ExcavatorCycleState.READY_AT_DIG_POSITION, 0.0)
+        machine.start(initial); machine.step(initial)
+        machine.step(observation(cfg, ExcavatorCycleState.APPROACH, 0.1))
+        machine.step(observation(cfg, ExcavatorCycleState.PENETRATE, 0.2, depth=.2, intersection=.01))
+        machine.step(observation(cfg, ExcavatorCycleState.CUT_AND_FILL, 0.3, cut_distance=.3, payload=.03))
+        machine.step(observation(cfg, ExcavatorCycleState.CURL_AND_BREAKOUT, 0.4, clearance=.06, payload=.03))
+        machine.step(observation(cfg, ExcavatorCycleState.LIFT_TO_TRANSPORT_HEIGHT, 0.5, clearance=1.1, payload=.03))
+        machine.step(observation(cfg, ExcavatorCycleState.REVERSE_TRAVEL, 0.6, base=(-2.1, 0, 0), payload=.03))
+        machine.step(observation(cfg, ExcavatorCycleState.ALIGN_DUMP, 0.7, base=(5, 0, 0), payload=.03))
+        machine.step(observation(cfg, ExcavatorCycleState.DUMP, 0.8, base=(5, 0, 0), payload=.015))
+
+        # Whole-domain Resting may increase due to unrelated M->R elsewhere;
+        # it cannot certify the dump while released material is still airborne.
+        still_airborne = observation(
+            cfg,
+            ExcavatorCycleState.DEPOSITION,
+            0.9,
+            base=(5, 0, 0),
+            payload=.015,
+            deposited=10.0,
+            airborne=.003,
+        )
+        self.assertEqual(
+            machine.step(still_airborne).state,
+            ExcavatorCycleState.DEPOSITION,
+        )
+
+        # Conversely no global Resting delta is required once payload release
+        # was measured, airborne is clear, and terrain is physically settled.
+        settled = replace(
+            still_airborne,
+            timestamp_s=1.0,
+            deposited_volume_m3=0.0,
+            airborne_volume_m3=0.0,
+        )
+        self.assertEqual(
+            machine.step(settled).state,
             ExcavatorCycleState.BUCKET_RECOVERY,
         )
 

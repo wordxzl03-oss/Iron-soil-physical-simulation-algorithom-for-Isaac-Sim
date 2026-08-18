@@ -12,21 +12,22 @@ from ..performance import WarpRuntime
 from ..terrain import TerrainGrid
 
 
-_KERNELS: dict[int, tuple[Any, Any]] = {}
+_KERNELS: dict[int, tuple[Any, Any, Any]] = {}
 
 
-def _kernels(wp: Any) -> tuple[Any, Any]:
+def _kernels(wp: Any) -> tuple[Any, Any, Any]:
     cached = _KERNELS.get(id(wp))
     if cached is not None:
         return cached
 
     @wp.kernel
-    def deposit(
+    def compute_deposition(
         b_eff: wp.array(dtype=wp.float64),
         mobile: wp.array(dtype=wp.float64),
         momentum_x: wp.array(dtype=wp.float64),
         momentum_y: wp.array(dtype=wp.float64),
         forcing: wp.array(dtype=wp.int32),
+        exclusion: wp.array(dtype=wp.int32),
         deposited: wp.array(dtype=wp.float64),
         removed_momentum_x: wp.array(dtype=wp.float64),
         removed_momentum_y: wp.array(dtype=wp.float64),
@@ -43,7 +44,6 @@ def _kernels(wp: Any) -> tuple[Any, Any]:
         gravity: wp.float64,
         cohesion_pa: wp.float64,
         stop_tangent: wp.float64,
-        settle_subcell_tail: int,
     ):
         index = wp.tid()
         row = index // cols
@@ -52,19 +52,11 @@ def _kernels(wp: Any) -> tuple[Any, Any]:
         deposited[index] = wp.float64(0.0)
         removed_momentum_x[index] = wp.float64(0.0)
         removed_momentum_y[index] = wp.float64(0.0)
-        if h <= wp.float64(0.0) or forcing[index] != 0:
-            return
-        if settle_subcell_tail != 0:
-            removed_momentum_x[index] = momentum_x[index]
-            removed_momentum_y[index] = momentum_y[index]
-            b_eff[index] = b_eff[index] + h
-            mobile[index] = wp.float64(0.0)
-            momentum_x[index] = wp.float64(0.0)
-            momentum_y[index] = wp.float64(0.0)
-            deposited[index] = h
-            mobile_to_resting_cumulative[index] = (
-                mobile_to_resting_cumulative[index] + h * weights[index]
-            )
+        if (
+            h <= wp.float64(0.0)
+            or forcing[index] != 0
+            or exclusion[index] != 0
+        ):
             return
         vx = momentum_x[index] / h
         vy = momentum_y[index] / h
@@ -104,12 +96,31 @@ def _kernels(wp: Any) -> tuple[Any, Any]:
         fraction_removed = amount / h
         removed_momentum_x[index] = momentum_x[index] * fraction_removed
         removed_momentum_y[index] = momentum_y[index] * fraction_removed
-        b_eff[index] = b_eff[index] + amount
-        mobile[index] = h - amount
-        fraction = (h - amount) / h
-        momentum_x[index] = momentum_x[index] * fraction
-        momentum_y[index] = momentum_y[index] * fraction
         deposited[index] = amount
+
+    @wp.kernel
+    def apply_deposition(
+        b_eff: wp.array(dtype=wp.float64),
+        mobile: wp.array(dtype=wp.float64),
+        momentum_x: wp.array(dtype=wp.float64),
+        momentum_y: wp.array(dtype=wp.float64),
+        deposited: wp.array(dtype=wp.float64),
+        removed_momentum_x: wp.array(dtype=wp.float64),
+        removed_momentum_y: wp.array(dtype=wp.float64),
+        mobile_to_resting_cumulative: wp.array(dtype=wp.float64),
+        weights: wp.array(dtype=wp.float64),
+    ):
+        index = wp.tid()
+        amount = deposited[index]
+        if amount <= wp.float64(0.0):
+            return
+        # ``amount`` was computed from the immutable pre-deposition snapshot in
+        # the preceding kernel.  No operator runs between these kernels, so the
+        # same-cell state is still authoritative here.
+        b_eff[index] = b_eff[index] + amount
+        mobile[index] = mobile[index] - amount
+        momentum_x[index] = momentum_x[index] - removed_momentum_x[index]
+        momentum_y[index] = momentum_y[index] - removed_momentum_y[index]
         mobile_to_resting_cumulative[index] = (
             mobile_to_resting_cumulative[index] + amount * weights[index]
         )
@@ -128,7 +139,7 @@ def _kernels(wp: Any) -> tuple[Any, Any]:
         wp.atomic_add(total, 1, density * removed_momentum_x[item] * weights[item])
         wp.atomic_add(total, 2, density * removed_momentum_y[item] * weights[item])
 
-    result = (deposit, weighted_sum)
+    result = (compute_deposition, apply_deposition, weighted_sum)
     _KERNELS[id(wp)] = result
     return result
 
@@ -165,7 +176,7 @@ class WarpDepositionOperator:
             raise ValueError("[WarpDeposition] state/runtime ownership mismatch")
         required = {
             "b_eff", "mobile", "momentum_x", "momentum_y", "material_mask",
-            "deposition_work", "weights",
+            "deposition_exclusion_mask", "deposition_work", "weights",
             "avalanche_m2r_cumulative",
         }
         missing = required - set(self.runtime.arrays)
@@ -181,8 +192,6 @@ class WarpDepositionOperator:
         self,
         material: MaterialScenario,
         dt_s: float,
-        *,
-        settle_subcell_tail: bool = False,
     ) -> WarpDepositionStep:
         if self._state is None:
             raise RuntimeError("[WarpDeposition] bind DeviceBulkState first")
@@ -192,15 +201,19 @@ class WarpDepositionOperator:
         state = self._state
         wp = self.runtime.wp
         weighted = wp.zeros(3, dtype=wp.float64, device=self.runtime.device)
-        deposit, weighted_sum = _kernels(wp)
+        compute_deposition, apply_deposition, weighted_sum = _kernels(wp)
 
+        # Phase 1 is read-only with respect to b_eff/mobile/momentum so every
+        # thread evaluates slope/stop eligibility against the same state.
         self.runtime.launch(
-            deposit,
+            compute_deposition,
             dim=state.size,
             inputs=[
                 self.runtime.arrays["b_eff"], self.runtime.arrays["mobile"],
                 self.runtime.arrays["momentum_x"], self.runtime.arrays["momentum_y"],
-                self.runtime.arrays["material_mask"], self.runtime.arrays["deposition_work"],
+                self.runtime.arrays["material_mask"],
+                self.runtime.arrays["deposition_exclusion_mask"],
+                self.runtime.arrays["deposition_work"],
                 self.runtime.arrays["deposition_removed_momentum_x"],
                 self.runtime.arrays["deposition_removed_momentum_y"],
                 self.runtime.arrays["avalanche_m2r_cumulative"],
@@ -210,7 +223,21 @@ class WarpDepositionOperator:
                 material.assumed_bulk_density_kg_m3, 9.81,
                 material.cohesion_proxy_pa,
                 float(np.tan(np.deg2rad(material.stop_angle_deg))),
-                int(settle_subcell_tail),
+            ],
+        )
+        # Phase 2 commits the precomputed same-cell transfer.  Separating the
+        # phases removes the former neighbor read/write race in the GPU kernel.
+        self.runtime.launch(
+            apply_deposition,
+            dim=state.size,
+            inputs=[
+                self.runtime.arrays["b_eff"], self.runtime.arrays["mobile"],
+                self.runtime.arrays["momentum_x"], self.runtime.arrays["momentum_y"],
+                self.runtime.arrays["deposition_work"],
+                self.runtime.arrays["deposition_removed_momentum_x"],
+                self.runtime.arrays["deposition_removed_momentum_y"],
+                self.runtime.arrays["avalanche_m2r_cumulative"],
+                self.runtime.arrays["weights"],
             ],
         )
         self.runtime.launch(
@@ -239,7 +266,10 @@ class WarpDepositionOperator:
         result.update(
             {
                 "resident_state": ["b_eff", "mobile", "momentum_x", "momentum_y"],
-                "semantics": "incremental_mobile_to_resting_below_cohesive_stop_yield",
+                "semantics": (
+                    "incremental_mobile_to_resting_below_cohesive_stop_yield"
+                    "+tool_occupancy_exclusion"
+                ),
                 "momentum_removal": "EXPLICITLY_REPORTED",
             }
         )

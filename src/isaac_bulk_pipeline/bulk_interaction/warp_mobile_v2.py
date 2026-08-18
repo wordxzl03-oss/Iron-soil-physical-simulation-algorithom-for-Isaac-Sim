@@ -32,16 +32,20 @@ def _contact_scatter_kernel(wp: Any) -> Any:
         indices: wp.array(dtype=wp.int32),
         normal_x_in: wp.array(dtype=wp.float64),
         normal_y_in: wp.array(dtype=wp.float64),
+        normal_z_in: wp.array(dtype=wp.float64),
         velocity_x_in: wp.array(dtype=wp.float64),
         velocity_y_in: wp.array(dtype=wp.float64),
+        velocity_z_in: wp.array(dtype=wp.float64),
         point_x_in: wp.array(dtype=wp.float64),
         point_y_in: wp.array(dtype=wp.float64),
         point_z_in: wp.array(dtype=wp.float64),
         mask: wp.array(dtype=wp.int32),
         normal_x: wp.array(dtype=wp.float64),
         normal_y: wp.array(dtype=wp.float64),
+        normal_z: wp.array(dtype=wp.float64),
         velocity_x: wp.array(dtype=wp.float64),
         velocity_y: wp.array(dtype=wp.float64),
+        velocity_z: wp.array(dtype=wp.float64),
         point_x: wp.array(dtype=wp.float64),
         point_y: wp.array(dtype=wp.float64),
         point_z: wp.array(dtype=wp.float64),
@@ -51,8 +55,10 @@ def _contact_scatter_kernel(wp: Any) -> Any:
         mask[target] = 1
         normal_x[target] = normal_x_in[source]
         normal_y[target] = normal_y_in[source]
+        normal_z[target] = normal_z_in[source]
         velocity_x[target] = velocity_x_in[source]
         velocity_y[target] = velocity_y_in[source]
+        velocity_z[target] = velocity_z_in[source]
         point_x[target] = point_x_in[source]
         point_y[target] = point_y_in[source]
         point_z[target] = point_z_in[source]
@@ -154,7 +160,11 @@ class WarpProductionMobileV2Solver:
         del integrator
         if state.runtime is not self.runtime:
             raise ValueError("[MobileV2Production] runtime mismatch")
-        required = {"b_eff", "mobile", "momentum_x", "momentum_y", "weights"}
+        required = {
+            "b_eff", "mobile", "momentum_x", "momentum_y", "weights",
+            "avalanche_latch", "mobile_export_cumulative",
+            "mobile_flux_export_cumulative",
+        }
         missing = required - set(self.runtime.arrays)
         if missing:
             raise ValueError(f"[MobileV2Production] missing state: {sorted(missing)}")
@@ -166,8 +176,8 @@ class WarpProductionMobileV2Solver:
         if "v2_tool_contact_mask" not in self.runtime.arrays:
             self.runtime.zeros("v2_tool_contact_mask", state.size, dtype=wp.int32)
         for name in (
-            "v2_tool_normal_x", "v2_tool_normal_y",
-            "v2_tool_velocity_x", "v2_tool_velocity_y",
+            "v2_tool_normal3_x", "v2_tool_normal3_y", "v2_tool_normal3_z",
+            "v2_tool_velocity_x", "v2_tool_velocity_y", "v2_tool_velocity_z",
             "v2_tool_contact_point_x", "v2_tool_contact_point_y",
             "v2_tool_contact_point_z",
         ):
@@ -183,8 +193,9 @@ class WarpProductionMobileV2Solver:
                 contact.tool_reference_position_terrain_m, dtype=np.float64
             )
         for name in (
-            "v2_tool_contact_mask", "v2_tool_normal_x", "v2_tool_normal_y",
-            "v2_tool_velocity_x", "v2_tool_velocity_y",
+            "v2_tool_contact_mask",
+            "v2_tool_normal3_x", "v2_tool_normal3_y", "v2_tool_normal3_z",
+            "v2_tool_velocity_x", "v2_tool_velocity_y", "v2_tool_velocity_z",
             "v2_tool_contact_point_x", "v2_tool_contact_point_y",
             "v2_tool_contact_point_z",
         ):
@@ -194,10 +205,12 @@ class WarpProductionMobileV2Solver:
         wp = runtime.wp
         compact = (
             ("v2_contact_indices", contact.flat_indices, wp.int32),
-            ("v2_contact_nx", contact.outward_normals_xy[:, 0], wp.float64),
-            ("v2_contact_ny", contact.outward_normals_xy[:, 1], wp.float64),
+            ("v2_contact_nx", contact.outward_normals_terrain[:, 0], wp.float64),
+            ("v2_contact_ny", contact.outward_normals_terrain[:, 1], wp.float64),
+            ("v2_contact_nz", contact.outward_normals_terrain[:, 2], wp.float64),
             ("v2_contact_tvx", contact.tool_surface_velocity_terrain_m_s[:, 0], wp.float64),
             ("v2_contact_tvy", contact.tool_surface_velocity_terrain_m_s[:, 1], wp.float64),
+            ("v2_contact_tvz", contact.tool_surface_velocity_terrain_m_s[:, 2], wp.float64),
             ("v2_contact_px", contact.closest_points_terrain_m[:, 0], wp.float64),
             ("v2_contact_py", contact.closest_points_terrain_m[:, 1], wp.float64),
             ("v2_contact_pz", contact.closest_points_terrain_m[:, 2], wp.float64),
@@ -209,10 +222,12 @@ class WarpProductionMobileV2Solver:
             inputs=[
                 *arrays,
                 runtime.arrays["v2_tool_contact_mask"],
-                runtime.arrays["v2_tool_normal_x"],
-                runtime.arrays["v2_tool_normal_y"],
+                runtime.arrays["v2_tool_normal3_x"],
+                runtime.arrays["v2_tool_normal3_y"],
+                runtime.arrays["v2_tool_normal3_z"],
                 runtime.arrays["v2_tool_velocity_x"],
                 runtime.arrays["v2_tool_velocity_y"],
+                runtime.arrays["v2_tool_velocity_z"],
                 runtime.arrays["v2_tool_contact_point_x"],
                 runtime.arrays["v2_tool_contact_point_y"],
                 runtime.arrays["v2_tool_contact_point_z"],
@@ -331,7 +346,10 @@ class WarpProductionMobileV2Solver:
         remaining = float(dt_s)
         substeps = 0
         cfl_limited = False
-        diagnostics_total = np.zeros(27)
+        diagnostics_total = np.zeros(33)
+        transport_crossings = wp.zeros(
+            1, dtype=wp.float64, device=self.runtime.device
+        )
         contact_substeps: list[dict[str, object]] = []
         cfl_measure_sync_ms = 0.0
         transport_and_source_sync_ms = 0.0
@@ -361,26 +379,33 @@ class WarpProductionMobileV2Solver:
                 self.runtime.arrays["b_eff"], self.runtime.arrays["mobile"],
                 self.runtime.arrays["momentum_x"], self.runtime.arrays["momentum_y"],
                 self.runtime.arrays["weights"],
+                self.runtime.arrays["avalanche_latch"],
+                self.runtime.arrays["mobile_export_cumulative"],
+                self.runtime.arrays["mobile_flux_export_cumulative"],
+                transport_crossings,
                 self.runtime.arrays["v2_dh"], self.runtime.arrays["v2_dqx"], self.runtime.arrays["v2_dqy"],
                 state.shape[0], state.shape[1], x_edges, state.grid.dx, state.grid.dy,
                 sub_dt, config.earth_pressure_coefficient, config.gravity_m_s2,
                 config.dry_tolerance_m,
             ])
-            diagnostic = wp.zeros(27, dtype=wp.float64, device=self.runtime.device)
+            diagnostic = wp.zeros(33, dtype=wp.float64, device=self.runtime.device)
             self.runtime.launch(kernels[3], dim=state.size, inputs=[
                 self.runtime.arrays["mobile"], self.runtime.arrays["momentum_x"],
                 self.runtime.arrays["momentum_y"], self.runtime.arrays["v2_dh"],
                 self.runtime.arrays["v2_dqx"], self.runtime.arrays["v2_dqy"],
                 self.runtime.arrays["v2_external_x"], self.runtime.arrays["v2_external_y"],
                 tool_contact_mask,
-                self.runtime.arrays["v2_tool_normal_x"],
-                self.runtime.arrays["v2_tool_normal_y"],
+                self.runtime.arrays["v2_tool_normal3_x"],
+                self.runtime.arrays["v2_tool_normal3_y"],
+                self.runtime.arrays["v2_tool_normal3_z"],
                 self.runtime.arrays["v2_tool_velocity_x"],
                 self.runtime.arrays["v2_tool_velocity_y"],
+                self.runtime.arrays["v2_tool_velocity_z"],
                 self.runtime.arrays["v2_tool_contact_point_x"],
                 self.runtime.arrays["v2_tool_contact_point_y"],
                 self.runtime.arrays["v2_tool_contact_point_z"],
-                self.runtime.arrays["weights"],
+                self.runtime.arrays["b_eff"], self.runtime.arrays["weights"],
+                state.shape[0], state.shape[1], state.grid.dx, state.grid.dy,
                 sub_dt, config.gravity_m_s2, config.basal_friction_coefficient,
                 tool_mu,
                 float(tool_reference[0]), float(tool_reference[1]), float(tool_reference[2]),
@@ -402,12 +427,18 @@ class WarpProductionMobileV2Solver:
                 "contact_active_cell_count": int(round(substep_diagnostic[19])),
                 "contact_mobile_volume_m3": float(substep_diagnostic[20]),
                 "contact_weighted_area_m2": float(substep_diagnostic[21]),
-                "requested_tool_to_mobile_impulse_xy_ns": (
-                    density * substep_diagnostic[9:11]
+                "requested_tool_to_mobile_impulse_xyz_ns": (
+                    density * substep_diagnostic[27:30]
                 ).tolist(),
-                "accepted_tool_to_mobile_impulse_xy_ns": (
-                    density * substep_diagnostic[9:11]
+                "accepted_tool_to_mobile_impulse_xyz_ns": (
+                    density * np.asarray([
+                        substep_diagnostic[9], substep_diagnostic[10],
+                        substep_diagnostic[30],
+                    ])
                 ).tolist(),
+                "unresolved_terrain_normal_impulse_ns": float(
+                    density * substep_diagnostic[31]
+                ),
                 "normal_impulse_ns": float(density * substep_diagnostic[11]),
                 "tangential_impulse_ns": float(density * substep_diagnostic[12]),
                 "mobile_kinetic_energy_change_due_to_contact_j": float(
@@ -417,8 +448,11 @@ class WarpProductionMobileV2Solver:
                 "machine_reaction_work_j": float(-density * substep_diagnostic[14]),
                 "frictional_dissipation_j": float(density * substep_diagnostic[15]),
                 "total_contact_dissipation_j": float(density * substep_diagnostic[26]),
-                "machine_reaction_impulse_xy_ns": (
-                    -density * substep_diagnostic[9:11]
+                "machine_reaction_impulse_xyz_ns": (
+                    -density * np.asarray([
+                        substep_diagnostic[9], substep_diagnostic[10],
+                        substep_diagnostic[30],
+                    ])
                 ).tolist(),
             })
             positivity_tolerance_m3 = (
@@ -436,10 +470,13 @@ class WarpProductionMobileV2Solver:
         summary_start = perf_counter()
         after = self._summary()
         summary_sync_ms += (perf_counter() - summary_start) * 1_000.0
+        gross_transport_volume_m3 = float(self._small(transport_crossings)[0])
         density = self.material.assumed_bulk_density_kg_m3
         gravity = np.asarray([diagnostics_total[0], diagnostics_total[1], 0.0]) * density
         friction = np.asarray([diagnostics_total[4], diagnostics_total[5], 0.0]) * density
-        tool = np.asarray([diagnostics_total[9], diagnostics_total[10], 0.0]) * density
+        tool = np.asarray([
+            diagnostics_total[9], diagnostics_total[10], diagnostics_total[30]
+        ]) * density
         angular_tool = np.asarray(diagnostics_total[16:19]) * density
         before_p = np.asarray([before[1], before[2], 0.0])
         after_p = np.asarray([after[1], after[2], 0.0])
@@ -463,7 +500,8 @@ class WarpProductionMobileV2Solver:
                 + diagnostics_total[26] * density
                 - diagnostics_total[14] * density
             ),
-            donor_export_m3=0.0, receiver_import_m3=0.0,
+            donor_export_m3=gross_transport_volume_m3,
+            receiver_import_m3=gross_transport_volume_m3,
             transport_mass_residual_m3=float(after[0] - before[0]),
             advected_momentum_crossings_kg_m_s=np.zeros(3),
             tool_normal_impulse_ns=float(diagnostics_total[11] * density),
@@ -510,4 +548,11 @@ class WarpProductionMobileV2Solver:
             "face_transfer": "ONE_SHARED_FLUX_TIMES_FACE_LENGTH_TIMES_DT",
             "cfl_metric": "MAX_LOCAL_WAVE_TIMES_FACE_LENGTH_OVER_DUAL_AREA",
             "K_classification": "ENGINEERING_CLOSURE_UNCALIBRATED",
+            "tool_contact_kinematics": (
+                "FULL_3D_BUCKET_NORMAL+SURFACE_TANGENT_CLOSING_ORACLE"
+                "+STRICT_XY_REPRESENTABLE_IMPULSE"
+            ),
+            "dimensionality_audit": (
+                "REQUESTED_3D_IMPULSE_VS_ACCEPTED_XY_REDUCED_IMPULSE"
+            ),
         }

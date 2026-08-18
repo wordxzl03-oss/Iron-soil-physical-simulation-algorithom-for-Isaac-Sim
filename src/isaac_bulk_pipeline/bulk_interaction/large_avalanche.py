@@ -40,10 +40,10 @@ class LargeAvalancheTransitionConfig:
     """Explicit assumptions for Resting-to-Mobile failure activation.
 
     ``mobilization_depth_m`` is the reduced-order failure-layer thickness.
-    ``gravity_velocity_length_m`` is the characteristic distance over which
-    gravity accelerates that layer at activation.  ``velocity_efficiency``
-    accounts for unresolved internal deformation.  All three require material-
-    and site-specific calibration before predictive use.
+    Resting->Mobile activation is deliberately mass-only: newly activated
+    material receives zero horizontal momentum and is accelerated later by the
+    authoritative Mobile solver.  No launch-length/velocity-efficiency tuning
+    parameters are therefore part of this transition model.
     """
 
     minimum_connected_cells: int = 32
@@ -52,8 +52,6 @@ class LargeAvalancheTransitionConfig:
     minimum_mean_excess_start_deg: float = 0.0
     persistence_time_s: float = 0.12
     mobilization_depth_m: float = 0.08
-    gravity_velocity_length_m: float = 0.25
-    velocity_efficiency: float = 0.45
     mobile_activity_speed_m_s: float = 0.05
     mobile_activity_volume_m3: float = 1.0e-5
     dry_tolerance_m: float = 1.0e-8
@@ -75,8 +73,6 @@ class LargeAvalancheTransitionConfig:
                 self.minimum_mean_excess_start_deg,
                 self.persistence_time_s,
                 self.mobilization_depth_m,
-                self.gravity_velocity_length_m,
-                self.velocity_efficiency,
                 self.mobile_activity_speed_m_s,
                 self.mobile_activity_volume_m3,
                 self.dry_tolerance_m,
@@ -89,10 +85,8 @@ class LargeAvalancheTransitionConfig:
             raise ValueError("[LargeAvalanche] numeric configuration must be finite/non-negative")
         if self.persistence_time_s <= 0.0:
             raise ValueError("[LargeAvalanche] persistence_time_s must be positive")
-        if self.mobilization_depth_m <= 0.0 or self.gravity_velocity_length_m <= 0.0:
-            raise ValueError("[LargeAvalanche] failure depth/velocity length must be positive")
-        if not 0.0 < self.velocity_efficiency <= 1.0:
-            raise ValueError("[LargeAvalanche] velocity_efficiency must lie in (0, 1]")
+        if self.mobilization_depth_m <= 0.0:
+            raise ValueError("[LargeAvalanche] mobilization_depth_m must be positive")
         if self.parameter_basis != LITERATURE_REDUCED_ORDER_UNCALIBRATED:
             raise ValueError(
                 "[LargeAvalanche] transition parameters must remain explicitly "
@@ -116,7 +110,6 @@ class LargeAvalancheTransitionConfig:
                 minimum_connected_area_m2=self.minimum_connected_area_m2 * (1.0 - fraction),
                 minimum_mobilizable_volume_m3=self.minimum_mobilizable_volume_m3 * (1.0 - fraction),
                 mobilization_depth_m=self.mobilization_depth_m * (1.0 + fraction),
-                velocity_efficiency=min(1.0, self.velocity_efficiency * (1.0 + fraction)),
                 sensitivity_case="more_mobile_uncalibrated",
             ),
             replace(self, sensitivity_case="nominal_uncalibrated"),
@@ -126,7 +119,6 @@ class LargeAvalancheTransitionConfig:
                 minimum_connected_area_m2=self.minimum_connected_area_m2 * (1.0 + fraction),
                 minimum_mobilizable_volume_m3=self.minimum_mobilizable_volume_m3 * (1.0 + fraction),
                 mobilization_depth_m=self.mobilization_depth_m * (1.0 - fraction),
-                velocity_efficiency=self.velocity_efficiency * (1.0 - fraction),
                 sensitivity_case="less_mobile_uncalibrated",
             ),
         )
@@ -245,7 +237,12 @@ class LargeAvalancheTransitionController:
     """Stateful physical-time detector and conservative activation operator."""
 
     NO_LARGE_EVENT = "NO_LARGE_EVENT"
-    LOCAL_STATIC_INSTABILITY = "LOCAL_STATIC_INSTABILITY"
+    # Y_start is a constitutive yield condition, not merely a MiniSlope seed.
+    # Small/disconnected yielded regions therefore enter the same conservative
+    # Mobile path; connected-area/volume/persistence thresholds classify event
+    # scale only and never veto physical yielding.
+    LOCAL_YIELD_MOBILE_PATH = "LOCAL_YIELD_MOBILE_PATH"
+    LOCAL_STATIC_INSTABILITY = LOCAL_YIELD_MOBILE_PATH  # compatibility alias
     PERSISTING_LARGE_UNSTABLE_REGION = "PERSISTING_LARGE_UNSTABLE_REGION"
     LARGE_AVALANCHE_MOBILE_PATH = "LARGE_AVALANCHE_MOBILE_PATH"
 
@@ -326,7 +323,10 @@ class LargeAvalancheTransitionController:
                 self._mobilized_latch_mask = np.zeros(grid.shape, dtype=bool)
                 self._mobilized_owned_surface_m = np.zeros(grid.shape, dtype=np.float64)
                 self._mobilized_export_baseline_m3 = np.zeros(grid.shape, dtype=np.float64)
-            eligible = diagnostics.largest_connected_mask & ~self._mobilized_latch_mask
+            # Constitutive Y_start owns Resting->Mobile transfer everywhere it
+            # is currently active.  Large-event connected/persistence metrics
+            # remain diagnostics/classification and are not authorization
+            # gates for local material failure.
             # Stress-based start/stop hysteresis replaces the former fixed
             # slope trigger.  A cohesive steep face can therefore remain
             # static when its driving stress is below strength.
@@ -335,6 +335,7 @@ class LargeAvalancheTransitionController:
                 resting, mobile, material, grid, integrator,
                 layer_depth_m=failure_depth,
             )
+            eligible = yield_state.start_mask & ~self._mobilized_latch_mask
             hysteresis_width = np.maximum(
                 yield_state.tau_resist_start_pa - yield_state.tau_resist_stop_pa,
                 1.0e-12,
@@ -347,20 +348,12 @@ class LargeAvalancheTransitionController:
                 np.minimum(resting, self.config.mobilization_depth_m * severity),
                 0.0,
             )
-            gradient_norm = np.hypot(grad_x, grad_y)
-            direction_x = np.divide(-grad_x, gradient_norm, out=np.zeros_like(grad_x), where=gradient_norm > 1e-12)
-            direction_y = np.divide(-grad_y, gradient_norm, out=np.zeros_like(grad_y), where=gradient_norm > 1e-12)
-            driving_acceleration = 9.81 * np.maximum(
-                np.sin(slope_rad)
-                - material.mobile_friction_coefficient * np.cos(slope_rad),
-                0.0,
-            )
-            speed = self.config.velocity_efficiency * np.sqrt(
-                2.0 * driving_acceleration * self.config.gravity_velocity_length_m
-            )
-            velocity[..., 0] = direction_x * speed
-            velocity[..., 1] = direction_y * speed
-            velocity[transfer <= self.config.dry_tolerance_m] = 0.0
+            # R->M activation is a conservative state transfer, not an
+            # instantaneous gravity launch.  The newly mobile tranche enters
+            # with zero horizontal momentum; gravity/pressure accelerate it
+            # through the Mobile V2 source/flux update over finite time.  This
+            # matches the authoritative GPU production path.
+            velocity.fill(0.0)
             assert self._mobilized_owned_surface_m is not None
             assert self._mobilized_export_baseline_m3 is not None
             activated = transfer > self.config.dry_tolerance_m
@@ -470,22 +463,26 @@ class LargeAvalancheTransitionController:
                 and diagnostics.maximum_mobile_speed_m_s <= self.config.settled_speed_m_s
             )
         )
-        large_static_event = diagnostics.connected_extent_pass and diagnostics.unstable_volume_pass
-        residual = diagnostics.unstable_cell_count > 0
-        ready = mobile_quiet and not large_static_event
-        settled = ready and not residual
+        physical_yield = diagnostics.unstable_cell_count > 0
+        large_static_event = (
+            physical_yield
+            and diagnostics.connected_extent_pass
+            and diagnostics.unstable_volume_pass
+        )
+        ready = mobile_quiet and not physical_yield
+        settled = ready
         if not mobile_quiet:
             reason = "MOBILE_LAYER_ACTIVE"
         elif large_static_event:
             reason = "LARGE_STATIC_FAILURE_REQUIRES_MOBILE_PATH"
-        elif residual:
-            reason = "LOCAL_RESIDUAL_READY_FOR_FINAL_MINISLOPE"
+        elif physical_yield:
+            reason = "LOCAL_YIELD_REQUIRES_MOBILE_PATH"
         else:
             reason = "TERRAIN_SETTLED"
         return TerrainSettledDiagnostic(
             settled=settled,
-            ready_for_final_minislope=ready and residual,
-            residual_static_relaxation_required=residual,
+            ready_for_final_minislope=False,
+            residual_static_relaxation_required=False,
             current_mobile_active=diagnostics.current_mobile_active,
             mobile_volume_m3=diagnostics.current_mobile_volume_m3,
             moving_mobile_volume_m3=diagnostics.moving_mobile_volume_m3,
@@ -572,10 +569,18 @@ class LargeAvalancheTransitionController:
                 resolved_export = (
                     exports - self._mobilized_export_baseline_m3
                     > self.config.dry_tolerance_m * weights
+                ) & (
+                    surface
+                    < self._mobilized_owned_surface_m
+                    - self.config.dry_tolerance_m
                 )
-            clear = ~moving & (
-                resolved_export
-                | (yield_state.yield_stop_margin_pa <= 0.0)
+            # Real conservative departure is sufficient to retire the owned
+            # tranche even while neighbouring Mobile remains fast.  Requiring
+            # low speed here artificially serializes an avalanche.  The
+            # independent physical-stability release still requires a quiet
+            # cell under Y_stop.
+            clear = resolved_export | (
+                ~moving & (yield_state.yield_stop_margin_pa <= 0.0)
             )
             self._mobilized_latch_mask[clear] = False
         # Connected extent describes propagation reach; mobilizable volume is
@@ -591,6 +596,25 @@ class LargeAvalancheTransitionController:
             0.0,
         )
         mobilizable_volume = integrator.integrate(mobilizable_height)
+        # Event-scale classification must not disappear merely because the
+        # current tranche is latched.  Evaluate the connected component's
+        # physical potential from current Resting/Y_start independently of
+        # ownership, while retaining the eligible volume above for diagnostics.
+        potential_height = np.where(
+            largest,
+            np.minimum(resting, self.config.mobilization_depth_m * severity),
+            0.0,
+        )
+        potential_volume = integrator.integrate(potential_height)
+        all_eligible = unstable
+        if self._mobilized_latch_mask is not None:
+            all_eligible = unstable & ~self._mobilized_latch_mask
+        eligible_height_all = np.where(
+            all_eligible,
+            np.minimum(resting, self.config.mobilization_depth_m * severity),
+            0.0,
+        )
+        eligible_volume_all = integrator.integrate(eligible_height_all)
         excess_start = np.maximum(slope_deg - material.start_angle_deg, 0.0)
         excess_stop = np.maximum(slope_deg - material.stop_angle_deg, 0.0)
         mean_start = float(np.mean(excess_start[largest])) if largest_count else 0.0
@@ -607,7 +631,7 @@ class LargeAvalancheTransitionController:
             largest_count >= self.config.minimum_connected_cells
             and area >= self.config.minimum_connected_area_m2
         )
-        volume_pass = mobilizable_volume >= self.config.minimum_mobilizable_volume_m3
+        volume_pass = potential_volume >= self.config.minimum_mobilizable_volume_m3
         excess_pass = mean_start >= self.config.minimum_mean_excess_start_deg
         physical_candidate = extent_pass and volume_pass and excess_pass
         if update_persistence:
@@ -622,13 +646,17 @@ class LargeAvalancheTransitionController:
             )
             self._previous_connected_mask = np.array(largest, copy=True) if physical_candidate else None
         persistence_pass = self._persistence_s >= self.config.persistence_time_s
-        ready = physical_candidate and persistence_pass
-        if ready:
+        large_ready = physical_candidate and persistence_pass
+        transition_ready = eligible_volume_all > (
+            self.config.dry_tolerance_m
+            * float(np.min(integrator.vertex_weights_m2))
+        )
+        if large_ready:
             classification = self.LARGE_AVALANCHE_MOBILE_PATH
         elif physical_candidate:
             classification = self.PERSISTING_LARGE_UNSTABLE_REGION
         elif np.any(unstable):
-            classification = self.LOCAL_STATIC_INSTABILITY
+            classification = self.LOCAL_YIELD_MOBILE_PATH
         else:
             classification = self.NO_LARGE_EVENT
         diagnostics = AvalanchePhysicalDiagnostics(
@@ -654,7 +682,7 @@ class LargeAvalancheTransitionController:
             unstable_volume_pass=volume_pass,
             excess_slope_pass=excess_pass,
             persistence_pass=persistence_pass,
-            transition_ready=ready,
+            transition_ready=transition_ready,
             parameter_basis=self.config.parameter_basis,
             sensitivity_case=self.config.sensitivity_case,
             largest_connected_mask=largest,
