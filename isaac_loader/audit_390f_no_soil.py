@@ -20,6 +20,56 @@ PARSER = argparse.ArgumentParser()
 PARSER.add_argument("--config", default="configs/390f_v2_interactive.yaml")
 PARSER.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
 PARSER.add_argument("--phase-timeout-s", type=float, default=20.0)
+PARSER.add_argument(
+    "--stability-case",
+    choices=("NONE", "POSITION_HOLD", "EFFORT_HOLD", "EFFORT_APPROACH"),
+    default="NONE",
+    help=(
+        "Run a short machine-only stability ablation and exit. POSITION_HOLD "
+        "uses the authored position drive; EFFORT_HOLD reproduces the production "
+        "effort-only actuator while holding the initial pose; EFFORT_APPROACH "
+        "uses the production effort-only actuator toward approach_pile. Track "
+        "traction is disabled in all three cases."
+    ),
+)
+PARSER.add_argument("--stability-duration-s", type=float, default=2.0)
+PARSER.add_argument("--stability-sample-period-s", type=float, default=0.1)
+PARSER.add_argument(
+    "--stability-gravity",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="Enable gravity during a stability ablation.",
+)
+PARSER.add_argument(
+    "--stability-ground",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="Enable the flat support-ground collider during a stability ablation.",
+)
+PARSER.add_argument(
+    "--stability-extra-clearance-m",
+    type=float,
+    default=0.0,
+    help="Additional whole-machine Z clearance applied before physics initialization.",
+)
+PARSER.add_argument(
+    "--stability-disable-excavator-collisions",
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help="Disable every excavator CollisionAPI during a stability ablation.",
+)
+PARSER.add_argument(
+    "--stability-hard-remove-world-anchor",
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help="Remove the authored lower-body world fixed joint from the composed runtime stage before physics initialization.",
+)
+PARSER.add_argument(
+    "--stability-disable-track-fixed-joints",
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help="Disable the left/right track fixed joints during a stability ablation to isolate internal fixed-joint frame correction.",
+)
 ARGS, _UNKNOWN = PARSER.parse_known_args()
 
 try:
@@ -86,11 +136,14 @@ def main() -> None:
     from isaac_bulk_pipeline.vehicle import (
         DifferentialTrackDriveConfig,
         DifferentialTrackDriveModel,
+        ExcavatorActuatorConfig,
+        ExcavatorActuatorModel,
         IsaacDifferentialTrackDriveAdapter,
     )
     from isaac_bulk_pipeline.visualization import LightingManager
 
     config = Interactive390FConfig.load(ROOT / ARGS.config)
+    stability_mode = ARGS.stability_case != "NONE"
     output_dir = ROOT / "outputs" / "390f_v2"
     output_dir.mkdir(parents=True, exist_ok=True)
     audit_path = output_dir / "390f_kinematic_geometry_audit.json"
@@ -106,8 +159,18 @@ def main() -> None:
     ground.CreateSizeAttr(2.0)
     ground.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, -0.10))
     ground.AddScaleOp().Set(Gf.Vec3f(30.0, 30.0, 0.10))
-    UsdPhysics.CollisionAPI.Apply(ground.GetPrim())
+    ground_collision = UsdPhysics.CollisionAPI.Apply(ground.GetPrim())
+    if stability_mode and not ARGS.stability_ground:
+        ground_collision.CreateCollisionEnabledAttr(False)
     ground.CreateDisplayColorAttr([(0.17, 0.19, 0.21)])
+
+    if stability_mode and not ARGS.stability_gravity:
+        physics_scenes = [prim for prim in stage.Traverse() if prim.IsA(UsdPhysics.Scene)]
+        if not physics_scenes:
+            raise RuntimeError("[390FStabilityAudit] no UsdPhysics.Scene found")
+        for scene_prim in physics_scenes:
+            scene_api = UsdPhysics.Scene(scene_prim)
+            scene_api.CreateGravityMagnitudeAttr(0.0)
     normal_contact_material = UsdShade.Material.Define(
         stage, "/World/Materials/TrackActuatorNormalContactOnly"
     )
@@ -147,6 +210,8 @@ def main() -> None:
     initial_placement_z_m = 0.0
     if config.auto_align_track_bottom_to_ground:
         initial_placement_z_m = float(config.track_ground_clearance_m - minimum_track_z)
+        if stability_mode:
+            initial_placement_z_m += float(ARGS.stability_extra_clearance_m)
         prefix_xform = UsdGeom.Xformable(stage.GetPrimAtPath("/World/Excavator"))
         prefix_xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, initial_placement_z_m))
     joint_names = ("swing_joint", "boom_joint", "stick_joint", "bucket_joint")
@@ -244,7 +309,27 @@ def main() -> None:
         # runtime stage; the referenced source USD on disk is untouched.
         anchor.GetPrim().SetActive(False)
         world_anchor_runtime_disabled = True
-    world_anchor_valid_after_override = stage.GetPrimAtPath(config.world_anchor_joint).IsValid()
+
+    if stability_mode and ARGS.stability_hard_remove_world_anchor:
+        anchor_prim = stage.GetPrimAtPath(config.world_anchor_joint)
+        if anchor_prim.IsValid():
+            stage.RemovePrim(config.world_anchor_joint)
+
+    if stability_mode and ARGS.stability_disable_track_fixed_joints:
+        for joint_name in ("left_track_fixed", "right_track_fixed"):
+            joint_prim = stage.GetPrimAtPath(f"{root}/Joints/{joint_name}")
+            if joint_prim.IsValid():
+                joint = UsdPhysics.Joint(joint_prim)
+                joint.GetJointEnabledAttr().Set(False)
+                joint_prim.SetActive(False)
+
+    if stability_mode and ARGS.stability_disable_excavator_collisions:
+        for prim in stage.Traverse():
+            if prim.GetPath().HasPrefix(Sdf.Path(root)) and prim.HasAPI(UsdPhysics.CollisionAPI):
+                UsdPhysics.CollisionAPI(prim).CreateCollisionEnabledAttr(False)
+
+    world_anchor_prim_after_override = stage.GetPrimAtPath(config.world_anchor_joint)
+    world_anchor_valid_after_override = world_anchor_prim_after_override.IsValid()
 
     descriptor = ToolDescriptorLoader.load(
         ToolDescriptorLoader.load_config(config.bucket_descriptor)
@@ -270,11 +355,27 @@ def main() -> None:
     # support plane.  Use the only already verified collision-clear pose as a
     # scene initial condition; this is set before runtime stepping and is not a
     # root-pose motion command.
-    excavator.set_joints_default_state(positions=np.asarray(config.phase_targets_rad["penetrate"], dtype=np.float64))
+    default_pose_key = "initial_pose" if stability_mode else "penetrate"
+    excavator.set_joints_default_state(
+        positions=np.asarray(config.phase_targets_rad[default_pose_key], dtype=np.float64)
+    )
     world.reset()
     dof_names = tuple(str(value) for value in excavator.dof_names)
     initial_q = np.asarray(excavator.get_joint_positions(), dtype=np.float64).reshape(-1)
     controller = excavator.get_articulation_controller()
+
+    anchor_post_reset = stage.GetPrimAtPath(config.world_anchor_joint)
+    world_anchor_post_reset = {
+        "configured_mobile_base_enabled": bool(config.mobile_base_enabled),
+        "prim_valid": bool(anchor_post_reset.IsValid()),
+        "prim_active": bool(anchor_post_reset.IsActive()) if anchor_post_reset.IsValid() else False,
+        "joint_enabled": (
+            _attr(anchor_post_reset, "physics:jointEnabled")
+            if anchor_post_reset.IsValid()
+            else None
+        ),
+        "hard_removed": bool(ARGS.stability_hard_remove_world_anchor) if stability_mode else False,
+    }
     track_drive = IsaacDifferentialTrackDriveAdapter(
         left_track,
         right_track,
@@ -289,6 +390,327 @@ def main() -> None:
             )
         ),
     )
+
+    if stability_mode:
+        if ARGS.stability_duration_s <= 0.0:
+            raise ValueError("[390FStabilityAudit] --stability-duration-s must be positive")
+        if ARGS.stability_sample_period_s <= 0.0:
+            raise ValueError("[390FStabilityAudit] --stability-sample-period-s must be positive")
+
+        # This branch is intentionally machine-only.  It uses the same flat,
+        # zero-Coulomb normal-support ground already owned by the historical
+        # no-soil audit and applies no track traction.  The only changed
+        # variable between POSITION_HOLD and EFFORT_HOLD is the arm actuation
+        # contract.  EFFORT_APPROACH then adds the real APPROACH arm target,
+        # still with zero track command as in the production state machine.
+        from scipy.spatial.transform import Rotation
+
+        clearance_tag = str(float(ARGS.stability_extra_clearance_m)).replace("-", "m").replace(".", "p")
+        stability_path = output_dir / (
+            "machine_stability_"
+            + ARGS.stability_case.lower()
+            + f"_ground{int(bool(ARGS.stability_ground))}"
+            + f"_gravity{int(bool(ARGS.stability_gravity))}"
+            + f"_collisions{int(not bool(ARGS.stability_disable_excavator_collisions))}"
+            + f"_anchor_removed{int(bool(ARGS.stability_hard_remove_world_anchor))}"
+            + f"_trackfixed{int(not bool(ARGS.stability_disable_track_fixed_joints))}"
+            + f"_clearance_{clearance_tag}.json"
+        )
+        initial_position = np.asarray(
+            lower_body.get_world_poses()[0], dtype=np.float64
+        ).reshape(-1, 3)[0]
+        initial_quaternion = np.asarray(
+            lower_body.get_world_poses()[1], dtype=np.float64
+        ).reshape(-1, 4)[0]
+        initial_rotation = Rotation.from_quat(
+            [
+                initial_quaternion[1],
+                initial_quaternion[2],
+                initial_quaternion[3],
+                initial_quaternion[0],
+            ]
+        ).as_matrix()
+        initial_joint = np.asarray(
+            excavator.get_joint_positions(), dtype=np.float64
+        ).reshape(-1)
+        # Mirror the production contact diagnostic: derive each CAD track
+        # bottom offset once after reset, then use the rigid-body pose each
+        # sample.  This avoids relying on USD BBox cache refresh during PhysX.
+        initial_bounds = UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(),
+            [UsdGeom.Tokens.default_, UsdGeom.Tokens.render, UsdGeom.Tokens.proxy],
+        )
+        track_bottom_offsets_m = []
+        for body, track_path in (
+            (left_track, config.left_track_body),
+            (right_track, config.right_track_body),
+        ):
+            body_z = float(
+                np.asarray(body.get_world_poses()[0], dtype=np.float64)
+                .reshape(-1, 3)[0, 2]
+            )
+            bottom_z = float(
+                initial_bounds.ComputeWorldBound(stage.GetPrimAtPath(track_path))
+                .ComputeAlignedRange()
+                .GetMin()[2]
+            )
+            track_bottom_offsets_m.append(body_z - bottom_z)
+
+        actuator = None
+        target = np.asarray(
+            config.phase_targets_rad[
+                "approach_pile"
+                if ARGS.stability_case == "EFFORT_APPROACH"
+                else "initial_pose"
+            ],
+            dtype=np.float64,
+        )
+        actuator_metadata = {
+            "mode": ARGS.stability_case,
+            "target_rad": target.tolist(),
+            "track_command": [0.0, 0.0],
+            "root_pose_write_count": 0,
+        }
+        if ARGS.stability_case.startswith("EFFORT_"):
+            actuator_config = ExcavatorActuatorConfig.cat_390f_l_mass_configuration()
+            limit_by_name = {item.joint_name: item for item in actuator_config.joints}
+            for joint_name in excavator.dof_names:
+                drive = UsdPhysics.DriveAPI.Get(
+                    stage.GetPrimAtPath(f"{root}/Joints/{joint_name}"), "angular"
+                )
+                drive.GetMaxForceAttr().Set(
+                    limit_by_name[str(joint_name)].effort_limit_nm
+                )
+                drive.GetStiffnessAttr().Set(0.0)
+                drive.GetDampingAttr().Set(0.0)
+            actuator = ExcavatorActuatorModel(
+                actuator_config, tuple(str(name) for name in excavator.dof_names)
+            )
+            actuator.reset(
+                np.asarray(
+                    excavator.get_joint_velocities(), dtype=np.float64
+                ).reshape(-1)
+            )
+            actuator_metadata.update(
+                {
+                    "shared_positive_power_limit_w": (
+                        actuator_config.shared_positive_power_limit_w
+                    ),
+                    "hold_effort_bias_initialized": False,
+                    "drive_stiffness": 0.0,
+                    "drive_damping": 0.0,
+                }
+            )
+        else:
+            actuator_metadata.update(
+                {
+                    "drive_contract": "AUTHORED_POSITION_DRIVE_DIAGNOSTIC_ONLY",
+                    "production_equivalent": False,
+                }
+            )
+
+        records = []
+        next_sample_s = 0.0
+        start_time_s = float(world.current_time)
+        end_time_s = start_time_s + float(ARGS.stability_duration_s)
+        latest_effort = np.zeros_like(initial_joint)
+        latest_target_velocity = np.zeros_like(initial_joint)
+        latest_positive_power_w = 0.0
+        latest_shared_power_scale = 1.0
+
+        while float(world.current_time) < end_time_s - 0.5 * config.physics_dt_s:
+            q = np.asarray(excavator.get_joint_positions(), dtype=np.float64).reshape(-1)
+            qd = np.asarray(excavator.get_joint_velocities(), dtype=np.float64).reshape(-1)
+            if actuator is None:
+                controller.apply_action(ArticulationAction(joint_positions=target))
+                latest_effort.fill(0.0)
+                latest_target_velocity.fill(0.0)
+                latest_positive_power_w = 0.0
+                latest_shared_power_scale = 1.0
+            else:
+                output = actuator.step(target, q, qd, config.physics_dt_s)
+                latest_effort = np.asarray(output.effort_command_nm, dtype=np.float64)
+                latest_target_velocity = np.asarray(
+                    output.target_velocity_rad_s, dtype=np.float64
+                )
+                latest_positive_power_w = float(output.positive_mechanical_power_w)
+                latest_shared_power_scale = float(output.shared_power_scale)
+                controller.apply_action(
+                    ArticulationAction(joint_efforts=latest_effort)
+                )
+
+            world.step(render=not ARGS.headless)
+            elapsed_s = float(world.current_time) - start_time_s
+            if elapsed_s + 1.0e-9 < next_sample_s:
+                continue
+            next_sample_s += float(ARGS.stability_sample_period_s)
+
+            position = np.asarray(
+                lower_body.get_world_poses()[0], dtype=np.float64
+            ).reshape(-1, 3)[0]
+            quaternion = np.asarray(
+                lower_body.get_world_poses()[1], dtype=np.float64
+            ).reshape(-1, 4)[0]
+            rotation = Rotation.from_quat(
+                [quaternion[1], quaternion[2], quaternion[3], quaternion[0]]
+            ).as_matrix()
+            relative_rotation = initial_rotation.T @ rotation
+            relative_rotvec_deg = np.rad2deg(
+                Rotation.from_matrix(relative_rotation).as_rotvec()
+            )
+            q_now = np.asarray(
+                excavator.get_joint_positions(), dtype=np.float64
+            ).reshape(-1)
+            qd_now = np.asarray(
+                excavator.get_joint_velocities(), dtype=np.float64
+            ).reshape(-1)
+            linear_velocity = np.asarray(
+                lower_body.get_linear_velocities(), dtype=np.float64
+            ).reshape(-1, 3)[0]
+            angular_velocity = np.asarray(
+                lower_body.get_angular_velocities(), dtype=np.float64
+            ).reshape(-1, 3)[0]
+            displacement = position - initial_position
+
+            track_bottom_z = []
+            for body, bottom_offset in zip(
+                (left_track, right_track), track_bottom_offsets_m
+            ):
+                body_z = float(
+                    np.asarray(body.get_world_poses()[0], dtype=np.float64)
+                    .reshape(-1, 3)[0, 2]
+                )
+                track_bottom_z.append(body_z - bottom_offset)
+
+            records.append(
+                {
+                    "t_s": elapsed_s,
+                    "lower_body_position_world_m": position.tolist(),
+                    "delta_position_world_m": displacement.tolist(),
+                    "horizontal_displacement_m": float(
+                        np.linalg.norm(displacement[:2])
+                    ),
+                    "vertical_displacement_m": float(displacement[2]),
+                    "relative_rotation_vector_deg": relative_rotvec_deg.tolist(),
+                    "relative_rotation_angle_deg": float(
+                        np.linalg.norm(relative_rotvec_deg)
+                    ),
+                    "root_linear_velocity_world_m_s": linear_velocity.tolist(),
+                    "root_angular_velocity_world_rad_s": angular_velocity.tolist(),
+                    "joint_position_rad": q_now.tolist(),
+                    "joint_velocity_rad_s": qd_now.tolist(),
+                    "joint_target_error_rad": (target - q_now).tolist(),
+                    "commanded_effort_nm": latest_effort.tolist(),
+                    "target_velocity_rad_s": latest_target_velocity.tolist(),
+                    "signed_mechanical_power_w": float(
+                        np.sum(latest_effort * qd_now)
+                    ),
+                    "positive_mechanical_power_w": latest_positive_power_w,
+                    "shared_power_scale": latest_shared_power_scale,
+                    "left_track_bottom_z_m": track_bottom_z[0],
+                    "right_track_bottom_z_m": track_bottom_z[1],
+                    "left_support_gap_m": track_bottom_z[0],
+                    "right_support_gap_m": track_bottom_z[1],
+                    "finite": bool(
+                        np.all(np.isfinite(position))
+                        and np.all(np.isfinite(q_now))
+                        and np.all(np.isfinite(qd_now))
+                    ),
+                }
+            )
+
+        max_horizontal = max(
+            (item["horizontal_displacement_m"] for item in records), default=0.0
+        )
+        max_vertical = max(
+            (abs(item["vertical_displacement_m"]) for item in records), default=0.0
+        )
+        max_rotation = max(
+            (item["relative_rotation_angle_deg"] for item in records), default=0.0
+        )
+        max_joint_speed = max(
+            (max(abs(v) for v in item["joint_velocity_rad_s"]) for item in records),
+            default=0.0,
+        )
+        max_joint_error = max(
+            (max(abs(v) for v in item["joint_target_error_rad"]) for item in records),
+            default=0.0,
+        )
+        all_finite = bool(all(item["finite"] for item in records))
+        envelope_exceeded = bool(
+            (not all_finite)
+            or max_horizontal > 0.10
+            or max_vertical > 0.10
+            or max_rotation > 5.0
+        )
+        result = {
+            "schema": "390f-machine-stability-ablation/v1",
+            "case": ARGS.stability_case,
+            "purpose": (
+                "DIAGNOSTIC_ABLATION_NOT_PRODUCTION_ACCEPTANCE"
+            ),
+            "support": {
+                "type": "FLAT_NORMAL_CONTACT_ONLY",
+                "ground_enabled": bool(ARGS.stability_ground),
+                "gravity_enabled": bool(ARGS.stability_gravity),
+                "extra_clearance_m": float(ARGS.stability_extra_clearance_m),
+                "ground_top_z_m": 0.0,
+                "physx_static_friction": float(
+                    normal_contact_physics.GetStaticFrictionAttr().Get()
+                ),
+                "physx_dynamic_friction": float(
+                    normal_contact_physics.GetDynamicFrictionAttr().Get()
+                ),
+                "track_traction_command": [0.0, 0.0],
+                "root_pose_write_count": 0,
+            },
+            "topology_ablation": {
+                "excavator_collisions_enabled": not bool(ARGS.stability_disable_excavator_collisions),
+                "track_fixed_joints_enabled": not bool(ARGS.stability_disable_track_fixed_joints),
+                "world_anchor": world_anchor_post_reset,
+            },
+            "initial_joint_position_rad": initial_joint.tolist(),
+            "initial_lower_body_position_world_m": initial_position.tolist(),
+            "actuator": actuator_metadata,
+            "duration_s": float(ARGS.stability_duration_s),
+            "sample_period_s": float(ARGS.stability_sample_period_s),
+            "summary": {
+                "all_finite": all_finite,
+                "max_horizontal_displacement_m": max_horizontal,
+                "max_vertical_displacement_m": max_vertical,
+                "max_relative_rotation_angle_deg": max_rotation,
+                "max_joint_speed_rad_s": max_joint_speed,
+                "max_joint_target_error_rad": max_joint_error,
+                "diagnostic_motion_envelope_exceeded": envelope_exceeded,
+                "diagnostic_thresholds": {
+                    "horizontal_displacement_m": 0.10,
+                    "vertical_displacement_m": 0.10,
+                    "relative_rotation_angle_deg": 5.0,
+                    "status": "ENGINEERING_DIAGNOSTIC_ONLY_NOT_MACHINE_SPEC",
+                },
+            },
+            "records": records,
+        }
+        stability_path.write_text(
+            json.dumps(result, indent=2) + "\n", encoding="utf-8"
+        )
+        print(
+            json.dumps(
+                {
+                    "status": (
+                        "MOTION_ENVELOPE_EXCEEDED"
+                        if envelope_exceeded
+                        else "STABLE_WITHIN_DIAGNOSTIC_ENVELOPE"
+                    ),
+                    "case": ARGS.stability_case,
+                    "output": str(stability_path),
+                    **result["summary"],
+                },
+                indent=2,
+            ),
+            flush=True,
+        )
+        return
     # Track force acceptance runs before deliberately probing the known-bad
     # historical arm targets.  Otherwise bucket/ground collisions from those
     # targets contaminate the mobile-base measurement.
