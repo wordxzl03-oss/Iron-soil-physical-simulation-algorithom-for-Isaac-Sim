@@ -17,7 +17,7 @@ import numpy as np
 
 from ..bulk_state import TerrainVolumeIntegrator
 from ..terrain import TerrainGrid
-from ..tools import ToolDescriptor, ToolState
+from ..tools import ToolDescriptor, ToolState, assert_open_bucket_physical_contact
 
 
 _EPS = 1.0e-12
@@ -27,35 +27,6 @@ def _ro(value: np.ndarray, dtype: np.dtype | type = np.float64) -> np.ndarray:
     result = np.ascontiguousarray(np.asarray(value, dtype=dtype).copy())
     result.setflags(write=False)
     return result
-
-
-def physical_bucket_contact_face_mask(geometry: Any) -> np.ndarray:
-    """Return physical wall faces while retaining the closed containment mesh.
-
-    The extruded cavity has two triangles across its geometrically open mouth
-    solely so point-inside tests have a watertight surface.  Those triangles
-    are topology for containment, not steel surfaces, and therefore must not
-    generate normal impulse, Coulomb friction, or machine reaction.
-    """
-
-    vertices = np.asarray(geometry.interior_vertices_local, dtype=np.float64)
-    faces = np.asarray(geometry.interior_faces, dtype=np.int64)
-    # The physical cavity may be narrower than the cutting edge, so its cap
-    # vertices need not coincide with the four display/intake mouth corners.
-    # Classify by the authoritative mouth *plane*, which is the actual
-    # topological closure added by ``from_extruded_profile``.
-    mouth_centroid = np.asarray(geometry.mouth_centroid_local, dtype=np.float64)
-    mouth_normal = np.asarray(geometry.mouth_normal_local, dtype=np.float64)
-    vertex_on_mouth = (
-        np.abs((vertices - mouth_centroid) @ mouth_normal) <= 1.0e-9
-    )
-    mouth_cap = np.all(vertex_on_mouth[faces], axis=1)
-    if int(np.count_nonzero(mouth_cap)) != 2:
-        raise ValueError(
-            "[ToolMobileContact] closed bucket must have exactly two "
-            "non-physical mouth-cap triangles"
-        )
-    return _ro(~mouth_cap, dtype=bool)
 
 
 @dataclass(frozen=True)
@@ -383,6 +354,7 @@ def build_tool_mobile_contact_support(
     geometry = descriptor.bucket_geometry
     if geometry is None:
         return ToolMobileContactSupport.empty()
+    contact_geometry = assert_open_bucket_physical_contact(geometry)
     candidate = np.asarray(candidate_mask, dtype=bool)
     bed = np.asarray(b_eff_after_activation_m, dtype=np.float64)
     mobile = np.asarray(mobile_after_activation_m, dtype=np.float64)
@@ -397,7 +369,9 @@ def build_tool_mobile_contact_support(
         tool_state.pose_terrain, geometry.interior_vertices_local
     )
     all_faces = np.asarray(geometry.interior_faces, dtype=np.int64)
-    physical_face_mask = physical_bucket_contact_face_mask(geometry)
+    physical_face_mask = np.asarray(
+        contact_geometry.containment_face_mask, dtype=bool
+    )
     triangles = vertices[all_faces]
     raw_normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
     raw_norms = np.linalg.norm(raw_normals, axis=1)
@@ -520,7 +494,12 @@ def build_tool_mobile_contact_support(
         "cad_triangle_count": int(len(triangles)),
         "containment_triangle_count": int(len(triangles)),
         "physical_contact_triangle_count": int(np.count_nonzero(physical_face_mask)),
-        "mouth_cap_physical_contact_triangle_count": 0,
+        "mouth_cap_physical_contact_triangle_count": int(
+            contact_geometry.mouth_physical_closure_face_count
+        ),
+        "bucket_contact_geometry_contract": contact_geometry.metadata[
+            "geometry_contract"
+        ],
         "broadphase_pair_count": int(len(candidate_indices) * len(triangles)),
         "triangle_aabb_test_count": int(triangle_aabb_test_count),
         "ray_triangle_test_count": int(ray_triangle_test_count),
