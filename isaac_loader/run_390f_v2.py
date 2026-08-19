@@ -925,11 +925,23 @@ def main() -> None:
     for name in ("swing_joint", "boom_joint", "stick_joint", "bucket_joint"):
         UsdPhysics.DriveAPI.Get(stage.GetPrimAtPath(f"{CONFIG.articulation_root}/Joints/{name}"), "angular").GetTargetVelocityAttr().Set(0.0)
     if CONFIG.mobile_base_enabled:
-        anchor = UsdPhysics.Joint(stage.GetPrimAtPath(CONFIG.world_anchor_joint))
-        if not anchor or not anchor.GetPrim().IsValid():
-            raise RuntimeError(f"[390FInteractive] configured world anchor missing: {CONFIG.world_anchor_joint}")
+        anchor_prim = stage.GetPrimAtPath(CONFIG.world_anchor_joint)
+        if not anchor_prim or not anchor_prim.IsValid():
+            raise RuntimeError(
+                f"[390FInteractive] configured world anchor missing: "
+                f"{CONFIG.world_anchor_joint}"
+            )
+
+        # Mirror the experimentally validated machine-stability path exactly.
+        # The source USD is referenced read-only; all edits are runtime-stage only.
+        anchor = UsdPhysics.Joint(anchor_prim)
         anchor.GetJointEnabledAttr().Set(False)
-        anchor.GetPrim().SetActive(False)
+        anchor_prim.SetActive(False)
+        stage.RemovePrim(CONFIG.world_anchor_joint)
+
+        # Do not require GetPrimAtPath(...).IsValid() == False here.
+        # A prim supplied by a referenced USD can remain compositionally valid
+        # even after the runtime-layer removal operation.
     support_group = UsdPhysics.CollisionGroup.Define(stage, "/World/V2_390F_CollisionGroups/TerrainSupport")
     Usd.CollectionAPI.Apply(support_group.GetPrim(), "colliders").CreateIncludesRel().SetTargets([Sdf.Path(ground_path)])
     bucket_group = UsdPhysics.CollisionGroup.Define(stage, "/World/V2_390F_CollisionGroups/BucketInteraction")
@@ -1036,24 +1048,27 @@ def main() -> None:
             stage.GetPrimAtPath(f"{CONFIG.articulation_root}/Joints/{joint_name}"),
             "angular",
         )
+        # Keep the authored PhysX position-drive stiffness/damping.  The real
+        # no-soil machine audit is stable with this drive, whereas the V1.3
+        # zero-PD effort-only servo overspeeds the arm.  Max force remains
+        # explicitly bounded by the documented/engineering actuator envelope.
         drive.GetMaxForceAttr().Set(
             actuator_limit_by_name[str(joint_name)].effort_limit_nm
         )
-        # Isaac Sim effort control is mutually exclusive with position/velocity
-        # drive control.  Production arm actuation therefore uses zero PD gains
-        # and sends the force/power-limited torque computed below directly.
-        drive.GetStiffnessAttr().Set(0.0)
-        drive.GetDampingAttr().Set(0.0)
     arm_actuator = ExcavatorActuatorModel(
         actuator_config, tuple(str(name) for name in articulation.dof_names)
     )
     arm_actuator.reset(
         np.asarray(articulation.get_joint_velocities(), dtype=np.float64).reshape(-1)
     )
+    arm_drive_target_rad = np.asarray(
+        articulation.get_joint_positions(), dtype=np.float64
+    ).reshape(-1).copy()
 
     def apply_bounded_arm_target(desired_position_rad: np.ndarray):
-        """Issue a force/power-limited effort servo command; never teleport links."""
+        """Advance a speed/slew-bounded, force-capped PhysX position-drive target."""
 
+        nonlocal arm_drive_target_rad
         desired = np.asarray(desired_position_rad, dtype=np.float64).reshape(-1)
         measured_position = np.asarray(
             articulation.get_joint_positions(), dtype=np.float64
@@ -1067,8 +1082,19 @@ def main() -> None:
             measured_velocity,
             CONFIG.physics_dt_s,
         )
+        proposed = (
+            arm_drive_target_rad
+            + output.target_velocity_rad_s * CONFIG.physics_dt_s
+        )
+        remaining_before = desired - arm_drive_target_rad
+        remaining_after = desired - proposed
+        reached = (remaining_before == 0.0) | (
+            np.sign(remaining_before) != np.sign(remaining_after)
+        )
+        proposed[reached] = desired[reached]
+        arm_drive_target_rad = proposed
         controller.apply_action(
-            ArticulationAction(joint_efforts=np.asarray(output.effort_command_nm))
+            ArticulationAction(joint_positions=arm_drive_target_rad)
         )
         return output
     lower_matrix = np.asarray(UsdGeom.XformCache().GetLocalToWorldTransform(stage.GetPrimAtPath(CONFIG.lower_body)), dtype=np.float64).T
@@ -2342,7 +2368,7 @@ def main() -> None:
         "minislope_tolerance_m": CONFIG.minislope_tolerance_m,
         "no_soil_machine_gate": acceptance,
         "root_pose_write_count": 0,
-        "mobile_base_world_anchor_disabled": CONFIG.mobile_base_enabled,
+        "mobile_base_world_anchor_runtime_removed": CONFIG.mobile_base_enabled,
         "initial_scene_track_ground_alignment_z_m": initial_placement_z_m,
         "bucket_support_ground_collision_filtered": True,
         "support_apron_flat_heightmap_overlap_m": apron_flat_overlap_m,
@@ -2362,11 +2388,16 @@ def main() -> None:
             "reason": "avoid double-counting tangential track-soil shear",
         },
         "arm_actuation": {
-            "method": "EFFORT_SERVO_WITH_TARGET_VELOCITY_SLEW_AND_SHARED_POWER_LIMIT",
+            "method": "SPEED_SLEWED_PHYSX_POSITION_DRIVE_WITH_FORCE_CAP",
             "acceleration_limit_semantics": (
                 "TARGET_VELOCITY_SLEW_BOUND_NOT_A_HARD_PHYSICAL_JOINT_ACCELERATION_BOUND"
             ),
             "shared_positive_power_limit_w": actuator_config.shared_positive_power_limit_w,
+            "shared_positive_power_limit_enforced": False,
+            "power_limit_note": (
+                "ActuatorModel power output is diagnostic only in this stabilized "
+                "position-drive fallback; PhysX drive maxForce is authoritative."
+            ),
             "root_or_link_pose_writes": 0,
             "dump_release_max_mouth_horizontal_speed_m_s": 0.25,
             "limits": [
@@ -2466,6 +2497,9 @@ def main() -> None:
                         articulation.get_joint_velocities(), dtype=np.float64
                     ).reshape(-1)
                 )
+                arm_drive_target_rad = np.asarray(
+                    articulation.get_joint_positions(), dtype=np.float64
+                ).reshape(-1).copy()
             physics_core.reset(level)
             if level in {ResetLevel.TERRAIN, ResetLevel.ALL}:
                 terrain_timestamp_s = float(world.current_time)
