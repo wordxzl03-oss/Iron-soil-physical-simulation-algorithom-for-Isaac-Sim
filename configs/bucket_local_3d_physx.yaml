@@ -1,0 +1,52 @@
+schema: bucket-local-3d-physx/v0.1
+
+# Canonical hypothesis test only. These are deliberately coarse engineering
+# parameters and MUST NOT be reported as calibrated iron-ore properties.
+particle_spacing_m: 0.10
+particle_radius_m: 0.045
+solid_rest_offset_m: 0.045
+particle_contact_offset_m: 0.05
+bulk_density_kg_m3: 1370.0
+friction: 0.60
+particle_friction_scale: 1.0
+damping: 0.0
+adhesion: 0.0
+particle_adhesion_scale: 1.0
+solver_position_iterations: 8
+maximum_particle_velocity_m_s: 20.0
+
+# Tool-frame seed volume. x spans bucket width; +y is outside/ahead of the
+# cutting lip in the audited descriptor; z spans a coarse local bed thickness.
+seed_box_tool_local_min_m: [-1.20, 0.10, -0.35]
+seed_box_tool_local_max_m: [1.20, 1.20, 0.75]
+minimum_seed_world_z_m: 0.05
+
+# One pseudo-particle represents one lattice cell of bulk material in the audit.
+# This is accounting volume, not the geometric volume of the rendered sphere.
+represented_bulk_volume_per_particle_m3: 0.001
+
+# Keep the first runtime test intentionally simple: hold at penetrate while the
+# particle bed settles, then replay the audited configuration targets. An exact
+# recorded production joint trace can override this with --trajectory-json.
+target_sequence:
+  - target: penetrate
+    duration_s: 0.75
+  - target: coordinated_cut
+    duration_s: 1.50
+  - target: curl_filling
+    duration_s: 2.50
+  - target: breakout
+    duration_s: 1.25
+
+audit_sample_period_s: 0.05
+final_hold_s: 1.00
+cavity_wall_margin_m: 0.02
+deep_cavity_y_threshold_m: -1.0
+
+# Frozen comparison from the real production CUT replay that exposed the
+# dimensionality loss. Do not lower production payload gates to make this pass.
+comparison_2p5d_payload_m3: 0.0072676
+minimum_meaningful_retained_volume_m3: 0.05
+
+parameter_status: ENGINEERING_CANONICAL_TEST_NOT_MATERIAL_CALIBRATED
+production_status: ISOLATED_PROTOTYPE_NO_2P5D_3D_COUPLING
