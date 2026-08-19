@@ -1,5 +1,10 @@
 """Phase-F conservative resting/mobile/intake/deposition pipeline."""
 
+from ..tools import (
+    BucketPhysicalContactGeometry,
+    assert_open_bucket_physical_contact,
+    physical_bucket_contact_face_mask,
+)
 from .bucket_intake import BucketIntakeConfig, BucketIntakeModel, BucketIntakeResult
 from .deposition import DepositionConfig, DepositionOperator, DepositionResult
 from .failure_zone import (
@@ -33,7 +38,6 @@ from .tool_mobile_contact import (
     FrictionalWallImpulse,
     ToolMobileContactSupport,
     build_tool_mobile_contact_support,
-    physical_bucket_contact_face_mask,
     resolve_frictional_wall_impulse,
 )
 from .warp_tool_mobile_contact import (
@@ -46,6 +50,9 @@ from .warp_deposition import WarpDepositionOperator, WarpDepositionStep
 from .model import BulkInteractionResult, BulkMaterialInteractionModel
 
 __all__ = [
+    "BucketPhysicalContactGeometry",
+    "assert_open_bucket_physical_contact",
+    "physical_bucket_contact_face_mask",
     "BucketIntakeConfig",
     "BucketIntakeModel",
     "BucketIntakeResult",
@@ -80,7 +87,6 @@ __all__ = [
     "FrictionalWallImpulse",
     "ToolMobileContactSupport",
     "build_tool_mobile_contact_support",
-    "physical_bucket_contact_face_mask",
     "resolve_frictional_wall_impulse",
     "DeviceToolMobileContactSupport",
     "WarpExactToolMobileContactGeometry",
