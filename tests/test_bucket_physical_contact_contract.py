@@ -123,3 +123,32 @@ def test_identity_transform_preserves_real_390f_contact_vertices() -> None:
     contact = assert_open_bucket_physical_contact(_real_390f_geometry())
     transformed = contact.transform_vertices(np.eye(4, dtype=np.float64))
     np.testing.assert_allclose(transformed, contact.vertices_local, rtol=0.0, atol=0.0)
+
+
+def test_cpu_tool_mobile_has_no_solver_local_mouth_cap_classifier() -> None:
+    source = (
+        ROOT
+        / "src"
+        / "isaac_bulk_pipeline"
+        / "bulk_interaction"
+        / "tool_mobile_contact.py"
+    ).read_text(encoding="utf-8")
+
+    assert "assert_open_bucket_physical_contact(geometry)" in source
+    assert "def physical_bucket_contact_face_mask(" not in source
+    assert "contact_geometry.containment_face_mask" in source
+
+
+def test_warp_tool_mobile_has_no_solver_local_mouth_cap_classifier() -> None:
+    source = (
+        ROOT
+        / "src"
+        / "isaac_bulk_pipeline"
+        / "bulk_interaction"
+        / "warp_tool_mobile_contact.py"
+    ).read_text(encoding="utf-8")
+
+    assert "from ..tools import assert_open_bucket_physical_contact" in source
+    assert "assert_open_bucket_physical_contact(geometry)" in source
+    assert "contact_geometry.containment_face_mask" in source
+    assert "from .tool_mobile_contact import physical_bucket_contact_face_mask" not in source
