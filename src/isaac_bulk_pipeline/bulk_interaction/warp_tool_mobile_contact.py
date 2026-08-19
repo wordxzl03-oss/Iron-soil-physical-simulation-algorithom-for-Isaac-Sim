@@ -17,7 +17,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from .tool_mobile_contact import physical_bucket_contact_face_mask
+from ..tools import assert_open_bucket_physical_contact
 
 
 _KERNELS: dict[int, tuple[Any, Any]] = {}
@@ -419,7 +419,7 @@ def _kernels(wp: Any) -> tuple[Any, Any]:
 
 
 class WarpExactToolMobileContactGeometry:
-    """Exact 68-triangle contact builder sharing production device authority."""
+    """Exact closed-containment/contact builder with canonical open-mouth mask."""
 
     backend_name = "GPU_WARP_EXACT_TOOL_MOBILE_CONTACT_SHARED_STATE"
 
@@ -427,6 +427,7 @@ class WarpExactToolMobileContactGeometry:
         geometry = None if descriptor is None else descriptor.bucket_geometry
         if geometry is None:
             raise ValueError("[WarpToolMobileContact] authoritative bucket geometry required")
+        contact_geometry = assert_open_bucket_physical_contact(geometry)
         self.state = state
         self.runtime = state.runtime
         self.grid = state.grid
@@ -440,7 +441,11 @@ class WarpExactToolMobileContactGeometry:
         valid = np.linalg.norm(raw, axis=1) > _EPS
         self.faces = np.ascontiguousarray(faces[valid], dtype=np.int32)
         self.physical_contact_face_mask = np.ascontiguousarray(
-            physical_bucket_contact_face_mask(geometry)[valid], dtype=np.int32
+            np.asarray(contact_geometry.containment_face_mask, dtype=np.int32)[valid],
+            dtype=np.int32,
+        )
+        self.contact_geometry_contract = str(
+            contact_geometry.metadata["geometry_contract"]
         )
         self.vertex_count = int(vertices.shape[0])
         self.face_count = int(self.faces.shape[0])
@@ -579,6 +584,7 @@ class WarpExactToolMobileContactGeometry:
                 np.count_nonzero(self.physical_contact_face_mask)
             ),
             "mouth_cap_physical_contact_triangle_count": 0,
+            "bucket_contact_geometry_contract": self.contact_geometry_contract,
             "broadphase_pair_count": int(diag_i[0]) * self.face_count,
             "triangle_aabb_test_count": int(diag_i[1]),
             "ray_triangle_test_count": int(diag_i[2]),
@@ -616,6 +622,7 @@ class WarpExactToolMobileContactGeometry:
             "execution_device": self.runtime.device,
             "vertex_count": self.vertex_count,
             "triangle_count": self.face_count,
+            "bucket_contact_geometry_contract": self.contact_geometry_contract,
             "topology_persistent_on_device": True,
             "contact_fields_resident": True,
         }
